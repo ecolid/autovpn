@@ -122,30 +122,67 @@ EOF
 # 1. 环境初始化与优化
 # =================================================================
 optimize_system() {
-    log_info ">>> 初始化系统环境与性能优化..."
-    apt update -y
-    apt install -y curl unzip socat nginx git uuid-runtime gnupg lsb-release jq
+    log_info ">>> 进入系统环境优化..."
+    
+    # 安装基础依赖
+    apt update -y > /dev/null
+    apt install -y curl unzip socat nginx git uuid-runtime gnupg lsb-release jq openssl > /dev/null
 
-    # 1.1 自动 Swap
-    MEM_TOTAL=$(free -m | awk '/^Mem:/{print $2}')
-    if [ "$MEM_TOTAL" -le 2048 ] && [ ! -f /swapfile ]; then
-        log_info "检测到内存小于 2GB，正在创建 2GB Swap..."
-        fallocate -l 2G /swapfile
-        chmod 600 /swapfile
-        mkswap /swapfile
-        swapon /swapfile
-        echo '/swapfile none swap sw 0 0' >> /etc/fstab
-        log_info "✅ Swap 创建成功"
+    # 1.1 BBR 加速检查
+    local current_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "unknown")
+    if [[ "$current_cc" == "bbr" ]]; then
+        log_info "检查：系统已启用 BBR 加速，跳过。"
+    else
+        echo -e "\n${YELLOW}【重要】风险提示：开启 BBR 加速${PLAIN}"
+        echo -e "说明：BBR 是 Google 开发的拥塞控制算法，能显著提升丢包环境下的吞吐量。"
+        echo -e "风险：在极少数 OpenVZ 架构或内核过旧的服务器上，强制修改参数可能导致网络连接异常。"
+        read -p "是否尝试开启 BBR 加速？ [Y/n]: " bbr_choice
+        if [[ ! "$bbr_choice" =~ ^[Nn]$ ]]; then
+            log_info "正在开启 BBR..."
+            echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+            echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+            sysctl -p > /dev/null || log_warn "BBR 提交失败，可能你的内核版本过低。"
+            log_info "✅ BBR 优化步骤完成"
+        fi
     fi
 
-    # 1.2 开启 BBR
-    if ! grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf; then
-        log_info "开启 Google BBR 加速..."
-        echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
-        echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
-        sysctl -p > /dev/null
-        log_info "✅ BBR 已开启"
+    # 1.2 Swap 虚拟内存检查
+    local current_swap=$(swapon --show --noheadings | wc -l)
+    if [ "$current_swap" -gt 0 ]; then
+        log_info "检查：系统已存在 Swap，跳过。"
+    else
+        local mem_total=$(free -m | awk '/^Mem:/{print $2}')
+        if [ "$mem_total" -le 1024 ]; then
+            echo -e "\n${YELLOW}【重要】风险提示：开启 Swap 虚拟内存${PLAIN}"
+            echo -e "说明：检测到你的内存小于 1GB。开启 Swap 可以防止因内存溢出导致的进程（如 Xray）崩溃。"
+            echo -e "影响：将占用 2GB 硬盘空间。风险：对于磁盘 IO 极差的服务器，频繁交换可能导致系统卡顿。"
+            read -p "是否创建 2GB Swap？ [Y/n]: " swap_choice
+            if [[ ! "$swap_choice" =~ ^[Nn]$ ]]; then
+                log_info "正在创建 2GB Swap..."
+                fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
+                chmod 600 /swapfile
+                mkswap /swapfile
+                swapon /swapfile
+                echo '/swapfile none swap sw 0 0' >> /etc/fstab
+                log_info "✅ Swap 创建成功"
+            fi
+        fi
     fi
+}
+
+# 模式对比导览
+show_comparison() {
+    echo -e "${BLUE}=================== 代理模式深度对比 ===================${PLAIN}"
+    echo -e "${GREEN}1. VLESS-Reality (高性能免域名专线)${PLAIN}"
+    echo -e "   - ${BLUE}适用场景：${PLAIN}追求极速体验，不想购买或维护域名。"
+    echo -e "   - ${BLUE}工作原理：${PLAIN}完美的流控伪装，使 VPS 看起来像是在访问知名大厂网站。"
+    echo -e "   - ${BLUE}优/缺点：${PLAIN}速度最快（原生 TCP），抗封锁强，但不支持 CDN 转发。"
+    echo ""
+    echo -e "${GREEN}2. VLESS-WS-TLS (CDN 级强力避风港)${PLAIN}"
+    echo -e "   - ${BLUE}适用场景：${PLAIN}敏感时期，或 VPS 的 IP 已经被墙时使用。"
+    echo -e "   - ${BLUE}工作原理：${PLAIN}将流量封包在标准 HTTPS 请求中，可通过 Cloudflare 节点转发。"
+    echo -e "   - ${BLUE}优/缺点：${PLAIN}生存力极强，支持 CDN 救活 IP，但延迟比 Reality 稍高。"
+    echo -e "${BLUE}========================================================${PLAIN}"
 }
 
 # =================================================================
@@ -161,7 +198,8 @@ install_reality() {
     UUID="${UUID:-${EXISTING_UUID:-$(uuidgen)}}"
     
     echo -e "\n${BLUE}[配置 2/3] 监听端口 (Port)${PLAIN}"
-    echo -e "说明: 建议使用 443 端口，伪装效果最好。如果 443 已被占用，请更换。"
+    echo -e "说明: 建议使用 443 端口以获得最佳伪装效果。"
+    echo -e "${RED}注意：如果你的 443 端口已被 Nginx/宝塔或其他程序占用，请更换其他端口（如 10000+）。${PLAIN}"
     read -p "请输入端口 [默认: ${EXISTING_PORT:-443}]: " XRAY_PORT
     XRAY_PORT="${XRAY_PORT:-${EXISTING_PORT:-443}}"
     
@@ -265,12 +303,16 @@ install_ws_tls() {
     UUID="${UUID:-${EXISTING_UUID:-$(uuidgen)}}"
     
     WS_PATH="${WS_PATH:-${EXISTING_PATH:-/lovelinux}}"
-    WARP_PORT=40000
-    XRAY_LISTEN_PORT=8443
-
     log_info "正在执行自动化部署任务 (同步 DNS、申请证书、配置 Nginx)..."
     
+    # 4. 可选伪装页面
+    echo -e "\n${BLUE}[配置 4/4] 网站伪装页面${PLAIN}"
+    echo -e "说明：AutoVPN 默认提供一个 2048 小游戏的伪装页面，访问你的域名会显示正常游戏。"
+    read -p "是否部署此伪装页面？ [Y/n]: " decoy_choice
+    decoy_choice="${decoy_choice:-Y}"
+
     # 环境清理
+    systemctl stop nginx || true
     systemctl stop nginx || true
     rm -f /etc/nginx/sites-enabled/default
 
@@ -332,7 +374,11 @@ EOF
     # Nginx + 2048 伪装
     log_info "配置 Nginx 伪装页..."
     mkdir -p /var/www/html
-    curl -L -o /var/www/html/index.html "https://raw.githubusercontent.com/cx88/2048/master/index.html"
+    if [[ "$decoy_choice" =~ ^[Yy]$ ]]; then
+        curl -L -o /var/www/html/index.html "https://raw.githubusercontent.com/cx88/2048/master/index.html"
+    else
+        echo "AutoVPN Working Perfectly" > /var/www/html/index.html
+    fi
     cat > /etc/nginx/sites-available/$DOMAIN.conf <<EOF
 server {
     listen 443 ssl http2;
@@ -398,10 +444,9 @@ manage_warp() {
 load_config
 clear
 echo -e "${BLUE}##########################################################${PLAIN}"
-echo -e "${BLUE}#                                                        #${PLAIN}"
-echo -e "${BLUE}#             🚀 AutoVPN 一键极简安装脚本               #${PLAIN}"
-echo -e "${BLUE}#                                                        #${PLAIN}"
-echo -e "${BLUE}##########################################################${PLAIN}"
+echo ""
+
+show_comparison
 echo ""
 
 if [ ! -z "$EXISTING_MODE" ]; then
