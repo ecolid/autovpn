@@ -272,17 +272,40 @@ TG_CHAT_ID="$TG_CHAT_ID"
 EOF
 }
 
-# 辅助：配置 Guardian Bot (Python 交互式机器人)
+# 辅助：配置 Guardian Bot (Python 交互式机器人 & 集群增强)
 setup_guardian_bot() {
-    if [ ! -z "$TG_BOT_TOKEN" ] && [ ! -z "$TG_CHAT_ID" ]; then
-        log_info "正在配置 AutoVPN Guardian Bot..."
-        
-        # 创建守护脚本
-        cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
-import requests, time, subprocess, os, json, sys
+    log_info "正在配置 AutoVPN Guardian 集群服务..."
+    
+    # 基础环境检查
+    if ! command -v python3 &> /dev/null; then
+        apt-get update &> /dev/null && apt-get install -y python3 python3-requests &> /dev/null
+    fi
+
+    # 集群模式选择
+    if [[ -z "$CLUSTER_MODE" ]]; then
+        echo -e "\n${CYAN}--- Guardian Cluster 集群配置 ---${NC}"
+        echo -e "1. 独立运行 (单机 Telegram 控制)"
+        echo -e "2. 开启集群模式 (通过 Cloudflare Workers 中继)"
+        read -p "请选择模式 [1/2, 默认 1]: " cluster_choice
+        if [[ "$cluster_choice" == "2" ]]; then
+            CLUSTER_MODE="on"
+            read -p "请输入 Cloudflare Worker URL: " CF_WORKER_URL
+            read -p "请输入集群通讯 Token (自定义安全字符串): " CLUSTER_TOKEN
+            save_env "CLUSTER_MODE" "$CLUSTER_MODE"
+            save_env "CF_WORKER_URL" "$CF_WORKER_URL"
+            save_env "CLUSTER_TOKEN" "$CLUSTER_TOKEN"
+        else
+            CLUSTER_MODE="off"
+            save_env "CLUSTER_MODE" "off"
+        fi
+    fi
+
+    # 创建驱动脚本
+    cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
+import requests, time, subprocess, os, json, sys, socket
 
 ENV_PATH = "/usr/local/etc/autovpn/.env"
-CONFIG_PATH = "/usr/local/etc/xray/config.json"
+NODE_ID = socket.gethostname()
 
 def load_env():
     env = {}
@@ -297,106 +320,100 @@ def load_env():
 ENV = load_env()
 BOT_TOKEN = ENV.get("TG_BOT_TOKEN")
 CHAT_ID = ENV.get("TG_CHAT_ID")
-API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+IS_CLUSTER = ENV.get("CLUSTER_MODE") == "on"
+CF_URL = ENV.get("CF_WORKER_URL", "").rstrip("/")
+C_TOKEN = ENV.get("CLUSTER_TOKEN")
 
 def run_cmd(cmd):
     try: return subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.STDOUT)
     except Exception as e: return str(e)
 
-def get_status():
-    ip = run_cmd("curl -s https://ipv4.icanhazip.com").strip()
-    xray = "✅ 运行中" if "active" in run_cmd("systemctl is-active xray") else "❌ 已停止"
-    warp = "✅ 运行中" if "active" in run_cmd("systemctl is-active warp-svc") else "❌ 已停止"
-    mem = run_cmd("free -m | awk '/Mem:/{printf \"%.1f%%\", $3/$2*100}'").strip()
-    return f"🔍 *AutoVPN 实时状态*\n\n📍 *IP:* `{ip}`\n⚙️ *Xray:* {xray}\n🛡️ *WARP:* {warp}\n📊 *内存:* {mem}"
+def get_status_data():
+    xray = "✅" if "active" in run_cmd("systemctl is-active xray") else "❌"
+    mem = run_cmd("free -m | awk '/Mem:/{printf \"%dMi\", $3}'").strip()
+    return {"id": NODE_ID, "xray": xray, "mem": mem, "t": int(time.time())}
 
-def get_link():
-    env = load_env()
-    uuid = env.get("UUID")
-    domain = env.get("DOMAIN")
-    ip = run_cmd("curl -s https://ipv4.icanhazip.com").strip()
-    
-    # 简单的配置解析
-    if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, 'r') as f:
-            config = f.read()
-            if "reality" in config:
-                port = run_cmd("jq -r '.inbounds[0].port' " + CONFIG_PATH).strip()
-                sni = run_cmd("jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' " + CONFIG_PATH).strip()
-                pbk = run_cmd("jq -r '.inbounds[0].streamSettings.realitySettings.publicKey' " + CONFIG_PATH).strip()
-                sid = run_cmd("jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0]' " + CONFIG_PATH).strip()
-                return f"vless://{uuid}@{ip}:{port}?encryption=none&security=reality&sni={sni}&fp=chrome&pbk={pbk}&sid={sid}&type=tcp&flow=xtls-rprx-vision#AutoVPN_Reality"
-            elif "ws" in config:
-                path = run_cmd("jq -r '.inbounds[0].streamSettings.wsSettings.path' " + CONFIG_PATH).strip()
-                return f"vless://{uuid}@{domain}:443?encryption=none&security=tls&type=ws&host={domain}&sni={domain}&path={path}#AutoVPN_WS_CDN"
-    return "❌ 无法提取配置"
-
-def send_msg(text):
-    requests.post(f"{API_URL}/sendMessage", json={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
+def cluster_sync(cf_url, c_token):
+    headers = {"X-Cluster-Token": c_token}
+    try:
+        # 1. 上报状态
+        requests.post(f"{cf_url}/report", json=get_status_data(), headers=headers, timeout=5)
+        # 2. 检查待办任务
+        r = requests.get(f"{cf_url}/report", headers=headers, timeout=5)
+        if r.status_code == 200:
+            task = r.json()
+            if task.get("cmd"):
+                res = run_cmd(task['cmd'] if not task['cmd'].startswith('/') else f"bash /usr/local/bin/autovpn {task['cmd']}")
+                requests.post(f"{cf_url}/result", json={"task_id": task['task_id'], "result": res}, headers=headers)
+    except: pass
 
 def main():
-    last_update_id = 0
-    log_info_msg = "🛡️ *AutoVPN Guardian 已上线*\n使用 /status, /link, /restart, /logs 指令进行管理。"
-    send_msg(log_info_msg)
+    env = load_env()
+    token = env.get("TG_BOT_TOKEN")
+    chat_id = env.get("TG_CHAT_ID")
+    cf_url = env.get("CF_WORKER_URL", "").rstrip("/")
+    c_token = env.get("CLUSTER_TOKEN")
+    is_cluster = env.get("CLUSTER_MODE") == "on"
     
+    last_update_id = 0
     while True:
         try:
-            r = requests.get(f"{API_URL}/getUpdates", params={"offset": last_update_id + 1, "timeout": 30}, timeout=35)
-            if r.status_code == 200:
-                data = r.json()
-                for update in data.get("result", []):
-                    last_update_id = update["update_id"]
-                    msg = update.get("message", {})
-                    text = msg.get("text", "")
-                    cid = str(msg.get("chat", {}).get("id", ""))
-                    
-                    if cid != CHAT_ID: continue
-                    
-                    if text == "/status":
-                        send_msg(get_status())
-                    elif text == "/link":
-                        send_msg(f"🔗 *您的连接链接:*\n`{get_link()}`")
-                    elif text == "/restart":
-                        send_msg("🔄 正在尝试重启 Xray...")
-                        run_cmd("systemctl restart xray")
-                        send_msg("✅ 重启指令已发送")
-                    elif text == "/logs":
-                        logs = run_cmd("journalctl -u xray -n 20 --no-pager")
-                        send_msg(f"📝 *最近 20 行日志:*\n```\n{logs}\n```")
-                    elif text == "/start":
-                        send_msg("👋 欢迎使用 AutoVPN Guardian！\n\n可用指令：\n/status - 查看运行状态\n/link - 获取订阅链接\n/restart - 重启 Xray\n/logs - 查看运行日志")
-        except Exception as e:
-            time.sleep(5)
+            if is_cluster:
+                cluster_sync(cf_url, c_token)
+            
+            # Master 节点: 处理 TG 消息
+            if token and chat_id:
+                r = requests.get(f"https://api.telegram.org/bot{token}/getUpdates", 
+                                 params={"offset": last_update_id + 1, "timeout": 20}, timeout=25)
+                if r.status_code == 200:
+                    for update in r.json().get("result", []):
+                        last_update_id = update["update_id"]
+                        msg = update.get("message", {})
+                        text = msg.get("text", "")
+                        if str(msg.get("chat", {}).get("id")) != chat_id: continue
+                        
+                        if text == "/status":
+                            if is_cluster:
+                                all_s = requests.get(f"{cf_url}/all_status", headers={"X-Cluster-Token": c_token}).json()
+                                res = "📊 **集群实时状态**\n"
+                                for nid, s in all_s.items():
+                                    res += f"CID: `{nid}` | Xray: {s['xray']} | Mem: {s['mem']}\n"
+                                requests.post(f"https://api.telegram.org/bot{token}/sendMessage", 
+                                             json={"chat_id": chat_id, "text": res, "parse_mode": "Markdown"})
+                            else:
+                                requests.post(f"https://api.telegram.org/bot{token}/sendMessage", 
+                                             json={"chat_id": chat_id, "text": f"📍 节点 `{NODE_ID}` 状态正常", "parse_mode": "Markdown"})
+        except: time.sleep(10)
+        time.sleep(5)
 
 if __name__ == "__main__":
     main()
 EOF
-        chmod +x /usr/local/etc/autovpn/guardian.py
+    chmod +x /usr/local/etc/autovpn/guardian.py
 
-        # 创建 Systemd Service
-        cat > /etc/systemd/system/autovpn-guardian.service <<EOF
+    # 创建 Systemd Service
+    cat > /etc/systemd/system/autovpn-guardian.service <<EOF
 [Unit]
-Description=AutoVPN Guardian Bot
+Description=AutoVPN Guardian Cluster Service
 After=network.target
 
 [Service]
 ExecStart=/usr/bin/python3 /usr/local/etc/autovpn/guardian.py
 Restart=always
-RestartSec=10
+RestartSec=15
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-        systemctl daemon-reload
-        systemctl enable autovpn-guardian.service && systemctl restart autovpn-guardian.service
-        log_info "✅ Guardian Bot 交互服务已启动"
-        
-        # 清理旧的任务
-        systemctl stop autovpn-monitor.timer 2>/dev/null || true
-        systemctl disable autovpn-monitor.timer 2>/dev/null || true
-        rm -f /etc/systemd/system/autovpn-monitor.*
-    fi
+    systemctl daemon-reload
+    systemctl enable autovpn-guardian && systemctl restart autovpn-guardian
+    log_info "✅ Guardian 集群服务已刷新"
+    
+    # 清理旧的 monitor 任务
+    systemctl stop autovpn-monitor.timer 2>/dev/null || true
+    systemctl disable autovpn-monitor.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/autovpn-monitor.*
 }
 
 # =================================================================
@@ -767,7 +784,7 @@ if [ ! -z "$EXISTING_MODE" ]; then
     echo -e "  ${GREEN}5.${PLAIN} 日志管理 (查看运行日志)"
     echo -e "  ${GREEN}6.${PLAIN} WARP 隧道管理 (刷新 IP/重置)"
     echo -e "  ${GREEN}7.${PLAIN} 防火墙管理 (自动开放端口)"
-    echo -e "  ${GREEN}8.${PLAIN} Telegram 机器人 (配置/通知测试)"
+    echo -e "  ${GREEN}8.${PLAIN} Guardian 集群 & 机器人"
     echo -e "  ${GREEN}9.${PLAIN} 彻底卸载 AutoVPN"
     echo -e "  ${GREEN}0.${PLAIN} 退出"
     read -p "请选择: " choice
@@ -784,7 +801,7 @@ if [ ! -z "$EXISTING_MODE" ]; then
             [ "$wc" == "1" ] && manage_warp "refresh" || manage_warp "reset"
             ;;
         7) open_ports 80; open_ports 443; [ ! -z "$EXISTING_PORT" ] && open_ports $EXISTING_PORT; log_info "防火墙策略已更新。" ;;
-        8) config_tg_bot; setup_guardian_bot ;;
+        8) setup_guardian_bot ;;
         9) uninstall_all ;;
         0) exit 0 ;;
         *) log_err "无效输入"; show_menu ;;
@@ -793,6 +810,7 @@ else
     echo -e "  ${GREEN}1.${PLAIN} 安装 VLESS-Reality (推荐：简单/免域名/高性能)"
     echo -e "  ${GREEN}2.${PLAIN} 安装 VLESS-WS-TLS (CDN/强伪装/需已有域名)"
     echo -e "  ${GREEN}3.${PLAIN} 仅进行系统环境优化 (BBR/Swap)"
+    echo -e "  ${GREEN}4.${PLAIN} 集群模式：加入已有集群 (Cloudflare-Native)"
     echo -e "  ${GREEN}0.${PLAIN} 退出脚本"
     echo ""
     read -p "请选择: " choice
@@ -800,6 +818,7 @@ else
         1) optimize_system; install_reality ;;
         2) optimize_system; install_ws_tls ;;
         3) optimize_system; log_info "系统优化完成。"; read -p "回车返回..." ;;
+        4) setup_guardian_bot ;;
         0) exit 0 ;;
         *) log_err "无效输入"; show_menu ;;
     esac
