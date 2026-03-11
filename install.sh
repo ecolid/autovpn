@@ -228,13 +228,98 @@ uninstall_all() {
     fi
 }
 
+# 辅助：发送 TG 消息
+send_tg_msg() {
+    local message="$1"
+    if [ ! -z "$TG_BOT_TOKEN" ] && [ ! -z "$TG_CHAT_ID" ]; then
+        curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${TG_CHAT_ID}" \
+            -d "text=${message}" \
+            -d "parse_mode=Markdown" > /dev/null
+    fi
+}
+
+# 辅助：配置 TG 机器人
+config_tg_bot() {
+    echo -e "\n${BLUE}==================== Telegram 机器人配置 ====================${PLAIN}"
+    echo -e "说明：开启后，脚本将在安装完成、IP 变更或每日巡检时给你发通知。"
+    read -p "是否配置 Telegram 机器人通知？ [y/N]: " setup_tg
+    if [[ "$setup_tg" =~ ^[Yy]$ ]]; then
+        read -p "请输入 Bot Token (从 @BotFather 获取): " INPUT_TOKEN
+        TG_BOT_TOKEN="${INPUT_TOKEN:-$TG_BOT_TOKEN}"
+        read -p "请输入 Chat ID (从 @userinfobot 获取): " INPUT_ID
+        TG_CHAT_ID="${INPUT_ID:-$TG_CHAT_ID}"
+        
+        if [ ! -z "$TG_BOT_TOKEN" ] && [ ! -z "$TG_CHAT_ID" ]; then
+            save_env
+            log_info "正在发送测试消息..."
+            send_tg_msg "🚀 *AutoVPN 机器人连接成功！*\n\n这是一条测试消息，说明你的订阅通知已生效。"
+            log_info "✅ 配置成功！"
+        else
+            log_err "Token 或 Chat ID 不能为空，配置取消。"
+        fi
+    fi
+}
+
 save_env() {
     mkdir -p /usr/local/etc/autovpn
     cat > "$ENV_PATH" <<EOF
 CF_TOKEN="$CF_TOKEN"
 DOMAIN="$DOMAIN"
 UUID="$UUID"
+TG_BOT_TOKEN="$TG_BOT_TOKEN"
+TG_CHAT_ID="$TG_CHAT_ID"
 EOF
+}
+
+# 辅助：定时任务 (TG 巡检)
+setup_monitor_task() {
+    if [ ! -z "$TG_BOT_TOKEN" ] && [ ! -z "$TG_CHAT_ID" ]; then
+        log_info "正在配置 TG 每日巡检定时任务..."
+        
+        # 创建巡检脚本
+        cat > /usr/local/etc/autovpn/monitor.sh <<'EOF'
+#!/usr/bin/env bash
+source /usr/local/etc/autovpn/.env
+IP=$(curl -s https://ipv4.icanhazip.com)
+XRAY_STATUS=$(systemctl is-active xray)
+WARP_STATUS=$(systemctl is-active warp-svc)
+MEM_USAGE=$(free -m | awk '/Mem:/{printf "%.1f%%", $3/$2*100}')
+
+MSG="🔍 *AutoVPN 每日巡检报告*\n\n"
+MSG+="📍 *公网 IP:* ${IP}\n"
+MSG+="⚙️ *Xray 状态:* ${XRAY_STATUS}\n"
+MSG+="🛡️ *WARP 状态:* ${WARP_STATUS}\n"
+MSG+="📊 *内存占用:* ${MEM_USAGE}\n\n"
+MSG+="✨ 系统运行正常，祝你使用愉快！"
+
+curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+    -d "chat_id=${TG_CHAT_ID}" -d "text=${MSG}" -d "parse_mode=Markdown" > /dev/null
+EOF
+        chmod +x /usr/local/etc/autovpn/monitor.sh
+
+        # 创建 Systemd Service & Timer
+        cat > /etc/systemd/system/autovpn-monitor.service <<EOF
+[Unit]
+Description=AutoVPN Daily Monitor
+[Service]
+ExecStart=/usr/local/etc/autovpn/monitor.sh
+EOF
+
+        cat > /etc/systemd/system/autovpn-monitor.timer <<EOF
+[Unit]
+Description=Run AutoVPN Monitor Daily
+[Timer]
+OnCalendar=daily
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
+
+        systemctl daemon-reload
+        systemctl enable autovpn-monitor.timer && systemctl start autovpn-monitor.timer
+        log_info "✅ 定时巡检任务已启动 (每日自动运行)"
+    fi
 }
 
 # =================================================================
@@ -287,6 +372,9 @@ optimize_system() {
             fi
         fi
     fi
+
+    # 1.3 TG 机器人配置
+    config_tg_bot
 }
 
 # 模式对比导览
@@ -390,12 +478,12 @@ EOF
     IP=$(curl -s https://ipv4.icanhazip.com)
     LINK="vless://${UUID}@${IP}:${XRAY_PORT}?encryption=none&security=reality&sni=${FAKE_DOMAIN}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&flow=xtls-rprx-vision#AutoVPN_Reality"
     
-    echo -e "\n${GREEN}==========================================================${PLAIN}"
-    echo -e "${GREEN}🎉 Reality 部署/更新成功！${PLAIN}"
-    echo -e "UUID: ${BLUE}$UUID${PLAIN}"
-    echo -e "\n分享链接 (直接复制导入):"
     echo -e "${GREEN}$LINK${PLAIN}"
-    echo -e "${GREEN}==========================================================${PLAIN}"
+    echo -e "=========================================================="
+    
+    # TG 通知与监控
+    send_tg_msg "✅ *AutoVPN Reality 部署成功!*\n\n📍 *IP:* ${IP}\n🔑 *UUID:* ${UUID}\n🔗 *链接:* \`${LINK}\`"
+    setup_monitor_task
 }
 
 # =================================================================
@@ -519,12 +607,12 @@ EOF
 
     # 结果
     LINK="vless://${UUID}@${DOMAIN}:443?encryption=none&security=tls&type=ws&host=${DOMAIN}&sni=${DOMAIN}&path=$(echo $WS_PATH | sed 's/\//%2F/g')#AutoVPN_WS_CDN"
-    echo -e "\n${GREEN}==========================================================${PLAIN}"
-    echo -e "${GREEN}🎉 VLESS-WS-TLS 部署/更新成功！${PLAIN}"
-    echo -e "域名: ${BLUE}$DOMAIN${PLAIN}"
-    echo -e "\n分享链接 (直接复制导入):"
     echo -e "${GREEN}$LINK${PLAIN}"
-    echo -e "${GREEN}==========================================================${PLAIN}"
+    echo -e "=========================================================="
+
+    # TG 通知与监控
+    send_tg_msg "✅ *AutoVPN WS-TLS 部署成功!*\n\n📍 *域名:* ${DOMAIN}\n🔑 *UUID:* ${UUID}\n🔗 *链接:* \`${LINK}\`"
+    setup_monitor_task
 }
 
 # =================================================================
@@ -602,6 +690,7 @@ if [ ! -z "$EXISTING_MODE" ]; then
     echo -e "  ${GREEN}5.${PLAIN} 日志管理 (查看运行日志)"
     echo -e "  ${GREEN}6.${PLAIN} WARP 隧道管理 (刷新 IP/重置)"
     echo -e "  ${GREEN}7.${PLAIN} 防火墙管理 (自动开放端口)"
+    echo -e "  ${GREEN}8.${PLAIN} Telegram 机器人 (配置/通知测试)"
     echo -e "  ${GREEN}9.${PLAIN} 彻底卸载 AutoVPN"
     echo -e "  ${GREEN}0.${PLAIN} 退出"
     read -p "请选择: " choice
@@ -618,6 +707,7 @@ if [ ! -z "$EXISTING_MODE" ]; then
             [ "$wc" == "1" ] && manage_warp "refresh" || manage_warp "reset"
             ;;
         7) open_ports 80; open_ports 443; [ ! -z "$EXISTING_PORT" ] && open_ports $EXISTING_PORT; log_info "防火墙策略已更新。" ;;
+        8) config_tg_bot; setup_monitor_task ;;
         9) uninstall_all ;;
         0) exit 0 ;;
         *) log_err "无效输入"; show_menu ;;
