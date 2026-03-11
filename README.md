@@ -1,31 +1,55 @@
 # AutoVPN 🚀
 
-VPS 代理一键配置工具。专为极致体验设计，集成系统优化与强力代理。
+AutoVPN 是一个功能强大、交互友好的 VPS 代理/VPN 一键配置脚本。它不仅支持极致性能的 **VLESS-Reality**，还支持强力伪装的 **VLESS-WS-TLS + CDN** 模式，并集成了 **Cloudflare WARP** 与多种系统优化。
 
-## ✨ 特性
+> [!TIP]
+> **为什么要选择 AutoVPN？**
+> 我们不仅提供了安装，还提供了一套全生命周期的 VPS 网络管理方案。它能够识别你原本复杂的环境，协助你平滑交接管理权。
 
-- **多模式支持**：Reality (高速度) 与 WS-TLS (强伪装)。
-- **系统优化**：自动开启 Google BBR 加速，低内存 VPS 自动配置 Swap。
-- **自动分流**：集成 Cloudflare WARP 出口，解锁被禁 IP 服务。
-- **网站伪装**：自动部署 2048 网页小游戏。
-- **极简链接**：安装完成后直接输出 VLESS 分享链接。
+## ✨ 核心特性
+
+- **多模式支持**：
+  - **Reality (推荐)**：极致性能，免域名，基于 XTLS-Reality，几乎不可被主动探测。
+  - **WS-TLS + CDN**：强力伪装，支持通过 Cloudflare CDN 转发，适合极端封锁环境。
+- **智能诊断与接管**：
+  - **深度探测 (Deep Discovery)**：自动扫描服务器上的已有的 Xray、V2ray、Sing-box 配置，并为你展示端口与协议详情。
+  - **管理权重接管**：支持一键接管非脚本安装的代理服务，实现统一管理。
+- **小白友好设计**：
+  - **保姆级引导**：所有输入项均附带详细中文说明和配置建议。
+  - **状态看板**：启动即显示核心参数、服务运行健康度以及当前的 WARP 出口 IP。
+- **系统深度优化**：
+  - **网络加速**：自动开启 Google BBR 拥塞控制算法。
+  - **内存增强**：低内存 VPS 自动配置并启用 Swap 交换分区。
+- **分流与隐私**：
+  - **WARP 解锁**：集成 Cloudflare WARP 隧道，解锁 Netflix/ChatGPT 等锁区服务。
+- **自动化支持**：
+  - **环境意图识别**：支持通过环境变量（如 `DOMAIN`, `UUID`）实现非交互式静默安装。
+  - **智能重装**：重装时自动预填旧配置，回车即刻完成。
 
 ## 📥 快速安装
 
-只需一行代码，即可开始：
+只需一行代码，即可开启安装或管理菜单：
 
 ```bash
-wget -N https://raw.githubusercontent.com/your-username/vps/main/autovpn/install.sh && chmod +x install.sh && ./install.sh
+wget -N https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh && chmod +x install.sh && ./install.sh
 ```
-> [!NOTE]
-> 请注意将上面的 `your-username` 替换为您实际的仓库用户名。
 
-## 🛠️ 交互菜单
+## 🛠️ 关于管理权接管
 
-1. **VLESS-Reality**: 最推荐的方式。不需要域名，配置简单，几乎不可被墙主动探测。
-2. **VLESS-WS-TLS**: 通过 Cloudflare CDN 转发。需要您拥有一个域名并托管在 Cloudflare，适合极端封锁环境。
+如果你原本手动安装了其他代理核心，运行脚本后：
+1. 脚本会展示探测到的配置（路径、协议、端口）。
+2. 询问你是否允许接管。若同意，脚本将接管服务生命周期，并按 AutoVPN 规范更新配置。
+3. 若拒绝，脚本将安全退出，不触动原始文件。
 
-## ⚠️ 要求
+## 🛡️ 要求与环境
 
-- 操作系统：Ubuntu 20.04+ / Debian 11+
-- 用户：必须使用 `root` 用户运行。
+- **操作系统**：Ubuntu 20.04+ / Debian 11+
+- **权限**：必须使用 `root` 用户运行。
+- **硬件**：即便是在 512MB 内存的 VPS 上也能流畅运行。
+
+## 🤝 贡献与维护
+
+如果你有任何建议或发现了 Bug，欢迎通过 GitHub 提交 [Issue](https://github.com/ecolid/autovpn/issues) 或直接发起 Pull Request。
+
+---
+*Powered by AutoVPN Team*
