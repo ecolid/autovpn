@@ -375,6 +375,7 @@ EOF
     local sql_init="
         CREATE TABLE IF NOT EXISTS nodes (
             id TEXT PRIMARY KEY, 
+            ip TEXT,
             cpu REAL, 
             mem_pct REAL, 
             v TEXT, 
@@ -420,14 +421,20 @@ EOF
     return 0
 }
 
-# 辅助：配置 Guardian Bot (Python 交互式机器人 & 集群增强)
-setup_guardian_bot() {
-    local mode=$1
-    log_info "正在配置 AutoVPN Guardian 集群服务..."
+    # [v1.7.0] 集群哨兵救援预配置 (SSH 互信)
+    log_info "正在配置集群自愈互信协议 (v1.7.0)..."
+    local key_path="/usr/local/etc/autovpn/cluster_key"
+    if [ ! -f "$key_path" ]; then
+        ssh-keygen -t rsa -b 2048 -f "$key_path" -N "" -q
+    fi
+    local pub_key=$(cat "${key_path}.pub")
+    # 安全加固：Forced Commands (只能执行监控拉起指令)
+    local restricted_entry="command=\"/usr/bin/python3 /usr/local/etc/autovpn/guardian.py --restart-only\",no-agent-forwarding,no-port-forwarding,no-pty $pub_key"
     
-    # 基础环境检查
-    if ! command -v python3 &> /dev/null; then
-        apt-get update &> /dev/null && apt-get install -y python3 python3-requests &> /dev/null
+    mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    if ! grep -q "$pub_key" ~/.ssh/authorized_keys 2>/dev/null; then
+        echo "$restricted_entry" >> ~/.ssh/authorized_keys
+        chmod 600 ~/.ssh/authorized_keys
     fi
 
     if [[ "$mode" != "silent" ]]; then
@@ -518,8 +525,13 @@ def check_health():
 def get_status_data(tid=None, res=None):
     cpu = subprocess.getoutput("top -bn1 | grep 'Cpu(s)' | awk '{print $2}'")
     mem = subprocess.getoutput("free | grep Mem | awk '{print $3/$2 * 100.0}'")
+    # 获取公网 IP (用于救援参考)
+    try: my_ip = requests.get("https://api64.ipify.org", timeout=5).text
+    except: my_ip = "unknown"
+    
     data = {
         "id": NODE_ID, 
+        "ip": my_ip,
         "cpu": cpu or "0", 
         "mem_pct": mem or "0", 
         "v": VERSION, 
@@ -529,6 +541,12 @@ def get_status_data(tid=None, res=None):
     return data
 
 def main():
+    # [v1.7.0] 处理 Rescue 指令 (由集群内其他节点通过受限 SSH 调用)
+    if "--restart-only" in sys.argv:
+        os.system("systemctl restart autovpn-guardian")
+        print("Sentinel: autovpn-guardian restarted successfully.")
+        return
+
     while True:
         try:
             with open(ENV_PATH, "r") as f:

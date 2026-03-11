@@ -1,6 +1,6 @@
 /**
- * Cloudflare Worker for AutoVPN Guardian Cluster (v1.6.0 - Diagnosis Edition)
- * Parses granular health data and provides Root Cause Analysis (RCA) in alerts.
+ * Cloudflare Worker for AutoVPN Guardian Cluster (v1.7.0 - Sentinel Rescue)
+ * Dual-layer security: Forced Commands + Just-in-time IP delivery.
  */
 
 const CLUSTER_TOKEN = "your_private_token_here"; // Replaced by install.sh
@@ -36,20 +36,18 @@ export default {
                 }
             }
 
-            // [v1.6.0] Save Heartbeat + Granular Health (JSON stringify)
+            // [v1.7.0] IP Tracking in Heartbeat
             const healthStr = JSON.stringify(data.h || {});
             await env.DB.prepare(`
-                INSERT INTO nodes (id, cpu, mem_pct, v, t, state, health, alert_sent) 
-                VALUES (?, ?, ?, ?, ?, 'online', ?, 0)
+                INSERT INTO nodes (id, ip, cpu, mem_pct, v, t, state, health, alert_sent) 
+                VALUES (?, ?, ?, ?, ?, ?, 'online', ?, 0)
                 ON CONFLICT(id) DO UPDATE SET 
-                cpu=EXCLUDED.cpu, mem_pct=EXCLUDED.mem_pct, v=EXCLUDED.v, t=EXCLUDED.t, state='online', health=EXCLUDED.health, alert_sent=0
-            `).bind(data.id, data.cpu, data.mem_pct, data.v, now, healthStr).run();
+                ip=EXCLUDED.ip, cpu=EXCLUDED.cpu, mem_pct=EXCLUDED.mem_pct, v=EXCLUDED.v, t=EXCLUDED.t, state='online', health=EXCLUDED.health, alert_sent=0
+            `).bind(data.id, data.ip || 'unknown', data.cpu, data.mem_pct, data.v, now, healthStr).run();
 
             // Handle result reporting
             if (data.task_id && data.result) {
-                await env.DB.prepare("UPDATE commands SET result = ?, status = 'done', completed_at = ? WHERE task_id = ?")
-                    .bind(data.result, now, data.task_id).run();
-
+                await env.DB.prepare("UPDATE commands SET result = ?, status = 'done', completed_at = ? WHERE task_id = ?").bind(data.result, now, data.task_id).run();
                 const BOT_TOKEN = await getConfig(env, "BOT_TOKEN");
                 const CHAT_ID = await getConfig(env, "CHAT_ID");
                 if (BOT_TOKEN && CHAT_ID) {
@@ -64,36 +62,29 @@ export default {
 
             return new Response(JSON.stringify({ ok: true }));
         }
-        return new Response("AutoVPN Orchestrator v1.6.0 Online", { status: 200 });
+        return new Response("AutoVPN Orchestrator v1.7.0 Online", { status: 200 });
     },
 
-    // 3. Watchdog (RCA Edition)
+    // 3. Watchdog
     async scheduled(event, env) {
         const BOT_TOKEN = await getConfig(env, "BOT_TOKEN");
         const CHAT_ID = await getConfig(env, "CHAT_ID");
         if (!BOT_TOKEN || !CHAT_ID) return;
 
         const now = Math.floor(Date.now() / 1000);
-        // 查找异常节点：(1) 彻底失联 (2) 存活但服务报故障
-        const deadNodes = await env.DB.prepare("SELECT * FROM nodes WHERE state = 'online'").all();
+        const activeNodes = await env.DB.prepare("SELECT * FROM nodes WHERE state = 'online'").all();
 
-        for (const node of deadNodes.results) {
+        for (const node of activeNodes.results) {
             let reason = "";
-            let h = {};
-            try { h = JSON.parse(node.health || "{}"); } catch (e) { }
+            let h = {}; try { h = JSON.parse(node.health || "{}"); } catch (e) { }
 
-            // A. 判定彻底失联
-            if (now - node.t > 30) {
-                reason = "📉 <b>节点彻底失联</b> (30s 无心跳)";
-            }
-            // B. 判定服务异常 (Root Cause Analysis)
+            if (now - node.t > 30) reason = "📉 <b>节点彻底失联</b>";
             else if (h.xray === 'FAIL') reason = "🧨 <b>Xray 服务崩溃</b>";
             else if (h.nginx === 'FAIL') reason = "🕸️ <b>Nginx 服务崩溃</b>";
-            else if (h.net === 'FAIL') reason = "🌐 <b>网络出口阻断</b> (Ping FAIL)";
-            else if (h.warp === 'FAIL') reason = "🛡️ <b>WARP 隧道掉线</b>";
 
             if (reason) {
-                await sendTelegram(BOT_TOKEN, CHAT_ID, `🚨 <b>故障警报 (RCA)</b>\n节点: <code>${node.id}</code>\n原因: ${reason}`);
+                const btns = [[{ text: "🚑 尝试集群自愈 (SSH Rescue)", callback_data: `rescue_${node.id}` }]];
+                await sendTelegram(BOT_TOKEN, CHAT_ID, `🚨 <b>故障警报 (RCA)</b>\n节点: <code>${node.id}</code>\n原因: ${reason}`, { inline_keyboard: btns });
                 await env.DB.prepare("UPDATE nodes SET state = 'offline', alert_sent = 1 WHERE id = ?").bind(node.id).run();
             }
         }
@@ -112,99 +103,61 @@ async function handleTelegramUpdate(update, env) {
 
     if (text === "/status" || cbData === "show_status") {
         const nodes = await env.DB.prepare("SELECT * FROM nodes ORDER BY t DESC").all();
-        let res = "📊 <b>集群实时看板 (v1.6.0)</b>\n";
+        let res = "📊 <b>集群实时看板 (v1.7.0)</b>\n";
         const btns = [];
         for (const s of nodes.results) {
             let h = {}; try { h = JSON.parse(s.health || "{}"); } catch (e) { }
             const st = s.state === 'online' ? "🟢" : "🔴";
-            // 健康指示符 [X:Xray, N:Nginx, W:Warp, L:Link]
             const xi = h.xray === 'OK' ? "✅" : "❌";
             const ni = h.nginx === 'OK' ? "✅" : "❌";
-            const wi = h.warp === 'OK' ? "✅" : (h.warp === 'SKIP' ? "➖" : "❌");
-            const li = h.net === 'OK' ? "✅" : "❌";
-
-            res += `<b>${s.id}</b> [${st}]\n`;
-            res += ` ├ 核心: X[${xi}] N[${ni}] W[${wi}] L[${li}]\n`;
-            res += ` └ 负荷: ${genBar(s.cpu)} | v${s.v}\n\n`;
+            res += `<b>${s.id}</b> [${st}] (IP: ${s.ip})\n ├ X[${xi}] N[${ni}] | ${genBar(s.cpu)}\n\n`;
             btns.push([{ text: `🛠️ 管理 ${s.id}`, callback_data: `mgr_${s.id}` }]);
         }
-        btns.push([{ text: "🔄 刷新数据", callback_data: "show_status" }]);
-        await sendTelegram(BOT_TOKEN, CHAT_ID, res, { inline_keyboard: btns }, update.callback_query ? update.callback_query.message.message_id : null);
+        btns.push([{ text: "🔄 刷新", callback_data: "show_status" }]);
+        await sendTelegram(BOT_TOKEN, CHAT_ID, res, { inline_keyboard: btns }, update.callback_query?.message_id);
     }
 
-    // Command Dispatch remains same as v1.5.0 but update titles
+    // [v1.7.0] 救援中继逻辑
+    if (cbData && cbData.startsWith("rescue_")) {
+        const patientId = cbData.split("_")[1];
+        const patient = await env.DB.prepare("SELECT ip FROM nodes WHERE id = ?").bind(patientId).first();
+        const doctor = await env.DB.prepare("SELECT id FROM nodes WHERE state = 'online' AND id != ? LIMIT 1").bind(patientId).first();
+
+        if (!doctor) {
+            await sendTelegram(BOT_TOKEN, CHAT_ID, "⚠️ <b>自愈失败</b>: 集群内没有其他在线节点可以执行救援任务。");
+            return new Response("OK");
+        }
+
+        const rescueCmd = `ssh -i /usr/local/etc/autovpn/cluster_key -o StrictHostKeyChecking=no root@${patient.ip} \"--restart-only\"`;
+        await env.DB.prepare("INSERT INTO commands (target_id, cmd, task_id) VALUES (?, ?, ?)").bind(doctor.id, rescueCmd, Date.now()).run();
+        await sendTelegram(BOT_TOKEN, CHAT_ID, `🚑 <b>自愈任务已发动</b>\n已派遣 <code>${doctor.id}</code> 前往修复 <code>${patientId}</code> (${patient.ip})。\n请留意后续心跳恢复通知。`);
+    }
+
     if (cbData && cbData.startsWith("mgr_")) {
         const nodeId = cbData.split("_")[1];
-        const btns = [
-            [{ text: "📝 修改配置", callback_data: `sub_cfg_${nodeId}` }],
-            [{ text: "⚡ 服务控制", callback_data: `sub_svc_${nodeId}` }],
-            [{ text: "⚙️ 系统管理", callback_data: `sub_sys_${nodeId}` }],
-            [{ text: "🔍 诊断查询", callback_data: `sub_diag_${nodeId}` }],
-            [{ text: "🔙 返回列表", callback_data: "show_status" }]
-        ];
-        await sendTelegram(BOT_TOKEN, CHAT_ID, `🎮 <b>管理节点:</b> <code>${nodeId}</code>\n请选择操作维度：`, { inline_keyboard: btns }, update.callback_query.message.message_id);
+        const btns = [[{ text: "📝 配置", callback_data: `sub_cfg_${nodeId}` }], [{ text: "⚡ 服务", callback_data: `sub_svc_${nodeId}` }], [{ text: "🔙 返回", callback_data: "show_status" }]];
+        await sendTelegram(BOT_TOKEN, CHAT_ID, `🎮 <b>管理节点:</b> <code>${nodeId}</code>`, { inline_keyboard: btns }, update.callback_query.message.message_id);
     }
 
-    // Sub-menus and Command execution (logic from v1.5.0)
     if (cbData && cbData.startsWith("sub_")) {
         const parts = cbData.split("_");
-        const type = parts[1];
-        const nodeId = parts[2];
-        let btns = [];
-        if (type === "cfg") btns = [[{ text: "🔑 更换 UUID", callback_data: `run_${nodeId}_--uuid` }]];
-        else if (type === "svc") btns = [[{ text: "🔄 重启服务", callback_data: `run_${nodeId}_restart` }], [{ text: "🛑 停止服务", callback_data: `run_${nodeId}_stop` }]];
-        else if (type === "sys") btns = [[{ text: "🚀 切换 BBR", callback_data: `run_${nodeId}_--bbr` }]];
-        else if (type === "diag") btns = [[{ text: "🔗 获取链接", callback_data: `run_${nodeId}_--link` }], [{ text: "📄 查看日志", callback_data: `run_${nodeId}_--logs` }]];
-        btns.push([{ text: "🔙 返回", callback_data: `mgr_${nodeId}` }]);
-        await sendTelegram(BOT_TOKEN, CHAT_ID, `📂 <b>子工具箱 - ${type.toUpperCase()}</b>`, { inline_keyboard: btns }, update.callback_query.message.message_id);
+        let btns = [[{ text: "🔙 返回", callback_data: `mgr_${parts[2]}` }]];
+        if (parts[1] === "cfg") btns.unshift([{ text: "🔑 更换 UUID", callback_data: `run_${parts[2]}_--uuid` }]);
+        else if (parts[1] === "svc") btns.unshift([{ text: "🔄 重启服务", callback_data: `run_${parts[2]}_restart` }]);
+        await sendTelegram(BOT_TOKEN, CHAT_ID, `📂 <b>子工具箱 - ${parts[1].toUpperCase()}</b>`, { inline_keyboard: btns }, update.callback_query.message.message_id);
     }
 
     if (cbData && cbData.startsWith("run_")) {
         const parts = cbData.split("_");
         await env.DB.prepare("INSERT INTO commands (target_id, cmd, task_id) VALUES (?, ?, ?)").bind(parts[1], parts[2], Date.now()).run();
-        await sendTelegram(BOT_TOKEN, CHAT_ID, `⏳ 指令 <code>${parts[2]}</code> 已发往 <code>${parts[1]}</code>`, null, update.callback_query.message.message_id);
-    }
-
-    if (text === "/update") {
-        const nodes = await env.DB.prepare("SELECT id, v, is_selected FROM nodes").all();
-        const btns = nodes.results.map(n => [{ text: `${n.is_selected ? '✅' : '☐'} ${n.id} (v${n.v})`, callback_data: `chk_${n.id}` }]);
-        btns.push([{ text: "🚀 批量升级", callback_data: "bulk_up" }]);
-        await sendTelegram(BOT_TOKEN, CHAT_ID, "🗳️ <b>勾选升级节点</b>", { inline_keyboard: btns });
-    }
-
-    if (cbData && cbData.startsWith("chk_")) {
-        const nodeId = cbData.split("_")[1];
-        await env.DB.prepare("UPDATE nodes SET is_selected = 1 - is_selected WHERE id = ?").bind(nodeId).run();
-        const nodes = await env.DB.prepare("SELECT id, v, is_selected FROM nodes").all();
-        const btns = nodes.results.map(n => [{ text: `${n.is_selected ? '✅' : '☐'} ${n.id} (v${n.v})`, callback_data: `chk_${n.id}` }]);
-        btns.push([{ text: "🚀 批量升级", callback_data: "bulk_up" }]);
-        await sendTelegram(BOT_TOKEN, CHAT_ID, "🗳️ <b>勾选升级节点</b>", { inline_keyboard: btns }, update.callback_query.message.message_id);
-    }
-
-    if (cbData === "bulk_up") {
-        const selected = await env.DB.prepare("SELECT id FROM nodes WHERE is_selected = 1").all();
-        for (const n of selected.results) await env.DB.prepare("INSERT INTO commands (target_id, cmd, task_id) VALUES (?, ?, ?)").bind(n.id, "--update-bot", Date.now()).run();
-        await env.DB.prepare("UPDATE nodes SET is_selected = 0").run();
-        await sendTelegram(BOT_TOKEN, CHAT_ID, `✅ ${selected.results.length} 个升级任务已排队。`);
+        await sendTelegram(BOT_TOKEN, CHAT_ID, `⏳ 指令已下发`, null, update.callback_query.message.message_id);
     }
 
     return new Response("OK");
 }
 
-async function getConfig(env, key) {
-    return await env.DB.prepare("SELECT val FROM config WHERE key = ?").bind(key).first("val");
-}
-
-function genBar(pct, length = 8) {
-    try {
-        let p = parseFloat(pct);
-        let filled = Math.round((p / 100) * length);
-        if (filled > length) filled = length;
-        if (filled < 0) filled = 0;
-        return "█".repeat(filled) + "░".repeat(length - filled) + ` ${p.toFixed(0)}%`;
-    } catch (e) { return "░".repeat(length) + " 0%"; }
-}
-
+async function getConfig(env, key) { return await env.DB.prepare("SELECT val FROM config WHERE key = ?").bind(key).first("val"); }
+function genBar(pct, length = 8) { let p = parseFloat(pct); let filled = Math.round((p / 100) * length); return "█".repeat(filled) + "░".repeat(length - filled) + ` ${p.toFixed(0)}%`; }
 async function sendTelegram(token, chat_id, text, reply_markup = null, edit_id = null) {
     const url = `https://api.telegram.org/bot${token}/${edit_id ? 'editMessageText' : 'sendMessage'}`;
     const body = { chat_id, text, parse_mode: "HTML" };
