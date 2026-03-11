@@ -358,8 +358,8 @@ EOF
         return 1
     fi
     
-    # [v1.4.0] 创建 D1 数据库并初始化 Schema
-    log_info "正在配置云端 D1 数据库 (v1.4.0)..."
+    # [v1.5.0] 创建 D1 数据库并初始化 Schema
+    log_info "正在配置云端 D1 数据库 (v1.5.0)..."
     local d1_res=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database" \
         -H "Authorization: Bearer ${CF_API_TOKEN}" \
         -H "Content-Type: application/json" \
@@ -371,9 +371,18 @@ EOF
     fi
     echo "$d1_id" > /usr/local/etc/autovpn/.d1_id
 
-    log_info "正在初始化任务编排 SQL 表结构..."
+    log_info "正在初始化任务编排 SQL 表结构 (v1.5.0)..."
     local sql_init="
-        CREATE TABLE IF NOT EXISTS nodes (id TEXT PRIMARY KEY, cpu REAL, mem_pct REAL, v TEXT, t INTEGER, is_selected INTEGER DEFAULT 0, alert_sent INTEGER DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS nodes (
+            id TEXT PRIMARY KEY, 
+            cpu REAL, 
+            mem_pct REAL, 
+            v TEXT, 
+            t INTEGER, 
+            state TEXT DEFAULT 'online',
+            is_selected INTEGER DEFAULT 0, 
+            alert_sent INTEGER DEFAULT 0
+        );
         CREATE TABLE IF NOT EXISTS commands (id INTEGER PRIMARY KEY AUTOINCREMENT, target_id TEXT, cmd TEXT, task_id INTEGER, result TEXT, status TEXT DEFAULT 'pending', completed_at INTEGER);
         CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, val TEXT);
         INSERT OR REPLACE INTO config (key, val) VALUES ('BOT_TOKEN', '$TG_BOT_TOKEN');
@@ -405,8 +414,8 @@ EOF
     curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/setWebhook" \
         -d "url=https://autovpn-relay.$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/subdomain" -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result.subdomain').workers.dev/webhook" > /dev/null
 
-    log_info "✅ D1 编排中心已激活！"
-    echo -e "Cluster Mode: ${CYAN}D1 SQL (v1.4.0)${NC}"
+    log_info "✅ D1 状态机监控中心已激活！"
+    echo -e "Cluster Mode: ${CYAN}D1 StatusMachine (v1.5.0)${NC}"
     return 0
 }
 
@@ -462,11 +471,11 @@ setup_guardian_bot() {
         fi
     fi
 
-    # 创建驱动脚本 (v1.4.0 - Orchestration Agent)
+    # 创建驱动脚本 (v1.5.0 - High-Freq StateAgent)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, sys, socket
 
-VERSION = "v1.4.0"
+VERSION = "v1.5.0"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
 
@@ -481,7 +490,7 @@ def run_cmd(cmd):
         proc = subprocess.Popen(full_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         out, _ = proc.communicate(timeout=60)
         
-        # [v1.4.1] 状态感知：区分成功与失败
+        # 状态感知：区分成功与失败
         status = "✅ 成功" if proc.returncode == 0 else "❌ 失败"
         lines = [l for l in out.split("\n") if l.strip()]
         summary = "\n".join(lines[-5:]) if lines else "无脚本回显"
@@ -503,8 +512,8 @@ def main():
             cf_url, c_token = env.get("CF_WORKER_URL", "").rstrip("/"), env.get("CLUSTER_TOKEN")
             if not cf_url: break
 
-            # 1. 心跳 & 读取任务
-            r = requests.post(f"{cf_url}/report", json=get_status_data(), headers={"X-Cluster-Token": c_token}, timeout=10)
+            # 1. 高频心跳 (10s 一次) & 读取任务
+            r = requests.post(f"{cf_url}/report", json=get_status_data(), headers={"X-Cluster-Token": c_token}, timeout=5)
             if r.status_code == 200:
                 task = r.json()
                 if task.get("cmd"):
@@ -514,7 +523,7 @@ def main():
                     requests.post(f"{cf_url}/report", json=get_status_data(tid=task['task_id'], res=res), 
                                  headers={"X-Cluster-Token": c_token}, timeout=10)
         except: pass
-        time.sleep(30)
+        time.sleep(10) # 10秒高频上报，支持极速状态感知
 
 if __name__ == "__main__": main()
 EOF
