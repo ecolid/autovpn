@@ -380,6 +380,7 @@ EOF
             v TEXT, 
             t INTEGER, 
             state TEXT DEFAULT 'online',
+            health TEXT DEFAULT '{}',
             is_selected INTEGER DEFAULT 0, 
             alert_sent INTEGER DEFAULT 0
         );
@@ -497,10 +498,33 @@ def run_cmd(cmd):
         return f"{status} (退出码: {proc.returncode})\n{summary}"
     except Exception as e: return f"❌ 执行异常: {str(e)}"
 
+def check_health():
+    health = {"xray": "OK", "nginx": "OK", "net": "OK", "warp": "SKIP"}
+    # 1. 检查服务
+    if os.system("systemctl is-active --quiet xray") != 0: health["xray"] = "FAIL"
+    if os.system("systemctl is-active --quiet nginx") != 0: health["nginx"] = "FAIL"
+    # 2. 检查网络 (1秒探测)
+    try:
+        r = requests.get("https://www.google.com/generate_204", timeout=2)
+        if r.status_code != 204: health["net"] = "FAIL"
+    except: health["net"] = "FAIL"
+    # 3. 检查 WARP
+    if os.path.exists("/usr/local/bin/warp"):
+        warp_res = subprocess.getoutput("warp status")
+        if "Connected" not in warp_res: health["warp"] = "FAIL"
+        else: health["warp"] = "OK"
+    return health
+
 def get_status_data(tid=None, res=None):
     cpu = subprocess.getoutput("top -bn1 | grep 'Cpu(s)' | awk '{print $2}'")
     mem = subprocess.getoutput("free | grep Mem | awk '{print $3/$2 * 100.0}'")
-    data = {"id": NODE_ID, "cpu": cpu or "0", "mem_pct": mem or "0", "v": VERSION}
+    data = {
+        "id": NODE_ID, 
+        "cpu": cpu or "0", 
+        "mem_pct": mem or "0", 
+        "v": VERSION, 
+        "h": check_health()
+    }
     if tid: data["task_id"] = tid; data["result"] = res
     return data
 
