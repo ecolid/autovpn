@@ -11,7 +11,18 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
+CYAN='\033[0;36m'
 PLAIN='\033[0m'
+NC='\033[0m'
+
+# 处理 OTA 更新指令 (Guardian Bot 调用)
+if [[ "$1" == "--update-bot" ]]; then
+    ENV_PATH="/usr/local/etc/autovpn/.env"
+    if [ -f "$ENV_PATH" ]; then source "$ENV_PATH"; fi
+    # 静默更新机器人逻辑
+    export AUTO_UPDATE_BOT=1
+fi
 
 log_info() { echo -e "${GREEN}[INFO] $1${PLAIN}"; }
 log_warn() { echo -e "${YELLOW}[WARN] $1${PLAIN}"; }
@@ -364,6 +375,7 @@ EOF
 
 # 辅助：配置 Guardian Bot (Python 交互式机器人 & 集群增强)
 setup_guardian_bot() {
+    local mode=$1
     log_info "正在配置 AutoVPN Guardian 集群服务..."
     
     # 基础环境检查
@@ -371,50 +383,53 @@ setup_guardian_bot() {
         apt-get update &> /dev/null && apt-get install -y python3 python3-requests &> /dev/null
     fi
 
-    # 已开启集群模式下的管理菜单
-    if [[ "$CLUSTER_MODE" == "on" ]]; then
-        echo -e "\n${CYAN}--- Guardian Cluster (已开启) ---${NC}"
-        echo -e "1. 刷新本地守护进程 (重启服务)"
-        echo -e "2. 检查并更新云端中继 (Cloudflare Worker)"
-        echo -e "3. 重新配置集群信息 (手动/自动)"
-        echo -e "0. 返回"
-        read -p "请选择: " cluster_mgr_choice
-        case $cluster_mgr_choice in
-            1) systemctl restart autovpn-guardian; log_info "守护进程已重启"; return ;;
-            2) deploy_cf_worker; return ;;
-            3) unset CLUSTER_MODE ;; # 进入下方的配置逻辑
-            *) return ;;
-        esac
+    if [[ "$mode" != "silent" ]]; then
+        # 已开启集群模式下的管理菜单
+        if [[ "$CLUSTER_MODE" == "on" ]]; then
+            echo -e "\n${CYAN}--- Guardian Cluster (已开启) ---${NC}"
+            echo -e "1. 刷新本地守护进程 (重启服务)"
+            echo -e "2. 检查并更新云端中继 (Cloudflare Worker)"
+            echo -e "3. 重新配置集群信息 (手动/自动)"
+            echo -e "0. 返回"
+            read -p "请选择: " cluster_mgr_choice
+            case $cluster_mgr_choice in
+                1) systemctl restart autovpn-guardian; log_info "守护进程已重启"; return ;;
+                2) deploy_cf_worker; return ;;
+                3) unset CLUSTER_MODE ;; # 进入下方的配置逻辑
+                *) return ;;
+            esac
+        fi
+
+        # 集群模式选择
+        if [[ -z "$CLUSTER_MODE" || "$CLUSTER_MODE" == "off" ]]; then
+            echo -e "\n${CYAN}--- Guardian Cluster 集群配置 ---${NC}"
+            echo -e "1. 独立运行 (单机 Telegram 控制)"
+            echo -e "2. 使用 Cloudflare Worker (全自动一键部署)"
+            echo -e "3. 使用 Cloudflare Worker (手动填入已有信息)"
+            read -p "请选择模式 [1/2/3, 默认 1]: " cluster_choice
+            case $cluster_choice in
+                2)
+                    deploy_cf_worker || { echo "切换到手动模式..."; read -p "请输入 Cloudflare Worker URL: " CF_WORKER_URL; read -p "请输入集群通讯 Token: " CLUSTER_TOKEN; CLUSTER_MODE="on"; }
+                    ;;
+                3)
+                    CLUSTER_MODE="on"
+                    read -p "请输入 Cloudflare Worker URL: " CF_WORKER_URL
+                    read -p "请输入集群通讯 Token: " CLUSTER_TOKEN
+                    save_env
+                    ;;
+                *)
+                    CLUSTER_MODE="off"
+                    save_env
+                    ;;
+            esac
+        fi
     fi
 
-    # 集群模式选择
-    if [[ -z "$CLUSTER_MODE" || "$CLUSTER_MODE" == "off" ]]; then
-        echo -e "\n${CYAN}--- Guardian Cluster 集群配置 ---${NC}"
-        echo -e "1. 独立运行 (单机 Telegram 控制)"
-        echo -e "2. 使用 Cloudflare Worker (全自动一键部署)"
-        echo -e "3. 使用 Cloudflare Worker (手动填入已有信息)"
-        read -p "请选择模式 [1/2/3, 默认 1]: " cluster_choice
-        case $cluster_choice in
-            2)
-                deploy_cf_worker || { echo "切换到手动模式..."; read -p "请输入 Cloudflare Worker URL: " CF_WORKER_URL; read -p "请输入集群通讯 Token: " CLUSTER_TOKEN; CLUSTER_MODE="on"; }
-                ;;
-            3)
-                CLUSTER_MODE="on"
-                read -p "请输入 Cloudflare Worker URL: " CF_WORKER_URL
-                read -p "请输入集群通讯 Token: " CLUSTER_TOKEN
-                save_env
-                ;;
-            *)
-                CLUSTER_MODE="off"
-                save_env
-                ;;
-        esac
-    fi
-
-    # 创建驱动脚本
+    # 创建驱动脚本 (Pro 版 - 汲取 OpenClaw 经验)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
-import requests, time, subprocess, os, json, sys, socket
+import requests, time, subprocess, os, json, sys, socket, re, html
 
+VERSION = "v1.1.0"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
 
@@ -424,16 +439,21 @@ def load_env():
         with open(ENV_PATH, "r") as f:
             for line in f:
                 if "=" in line:
-                    k, v = line.strip().split("=", 1)
-                    env[k] = v.strip('"')
+                    k, v = line.strip().split("=", 1).replace('"', '')
+                    env[k] = v.strip()
     return env
 
-ENV = load_env()
-BOT_TOKEN = ENV.get("TG_BOT_TOKEN")
-CHAT_ID = ENV.get("TG_CHAT_ID")
-IS_CLUSTER = ENV.get("CLUSTER_MODE") == "on"
-CF_URL = ENV.get("CF_WORKER_URL", "").rstrip("/")
-C_TOKEN = ENV.get("CLUSTER_TOKEN")
+def gen_bar(pct, length=10):
+    try: p = float(pct)
+    except: p = 0.0
+    filled = int(round(p / 100 * length))
+    if filled > length: filled = length
+    elif filled < 0: filled = 0
+    bar = "█" * filled + "░" * (length - filled)
+    if p < 60: icon = "🟢"
+    elif p < 85: icon = "🟡"
+    else: icon = "🔴"
+    return f"{icon} [{bar}] {p: >4.1f}%"
 
 def run_cmd(cmd):
     try: return subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.STDOUT)
@@ -441,61 +461,117 @@ def run_cmd(cmd):
 
 def get_status_data():
     xray = "✅" if "active" in run_cmd("systemctl is-active xray") else "❌"
-    mem = run_cmd("free -m | awk '/Mem:/{printf \"%dMi\", $3}'").strip()
-    return {"id": NODE_ID, "xray": xray, "mem": mem, "t": int(time.time())}
+    cpu = run_cmd("top -bn1 | grep 'Cpu(s)' | awk '{print $2}'").strip() or "0"
+    mem_pct = run_cmd("free | grep Mem | awk '{print $3/$2 * 100.0}'").strip() or "0"
+    mem_used = run_cmd("free -m | awk '/Mem:/{printf \"%dMi\", $3}'").strip()
+    return {"id": NODE_ID, "xray": xray, "cpu": cpu, "mem_pct": mem_pct, "mem_used": mem_used, "v": VERSION, "t": int(time.time())}
+
+def send_tg(token, chat_id, text, reply_markup=None, edit_id=None):
+    url = f"https://api.telegram.org/bot{token}/"
+    method = "sendMessage" if not edit_id else "editMessageText"
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+    if edit_id: payload["message_id"] = edit_id
+    if reply_markup: payload["reply_markup"] = json.dumps(reply_markup)
+    try: return requests.post(url + method, json=payload, timeout=10).json()
+    except: return {}
+
+def send_action(token, chat_id, action="typing"):
+    try: requests.post(f"https://api.telegram.org/bot{token}/sendChatAction", json={"chat_id": chat_id, "action": action}, timeout=5)
+    except: pass
 
 def cluster_sync(cf_url, c_token):
     headers = {"X-Cluster-Token": c_token}
     try:
-        # 1. 上报状态
         requests.post(f"{cf_url}/report", json=get_status_data(), headers=headers, timeout=5)
-        # 2. 检查待办任务
         r = requests.get(f"{cf_url}/report", headers=headers, timeout=5)
         if r.status_code == 200:
             task = r.json()
             if task.get("cmd"):
-                res = run_cmd(task['cmd'] if not task['cmd'].startswith('/') else f"bash /usr/local/bin/autovpn {task['cmd']}")
+                res = run_cmd(f"bash /usr/local/bin/autovpn {task['cmd']}")
                 requests.post(f"{cf_url}/result", json={"task_id": task['task_id'], "result": res}, headers=headers)
     except: pass
 
+def handle_ota(token, chat_id):
+    send_tg(token, chat_id, "🔍 正在从 GitHub 检查更新...")
+    try:
+        r = requests.get("https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh", timeout=10)
+        if r.status_code == 200:
+            send_tg(token, chat_id, "📥 脚本已就绪，正在执行热更新并重启守护进程...")
+            os.system("curl -sL https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh | bash -s -- --update-bot &")
+    except Exception as e:
+        send_tg(token, chat_id, f"❌ OTA 失败: {str(e)}")
+
 def main():
     env = load_env()
-    token = env.get("TG_BOT_TOKEN")
-    chat_id = env.get("TG_CHAT_ID")
-    cf_url = env.get("CF_WORKER_URL", "").rstrip("/")
-    c_token = env.get("CLUSTER_TOKEN")
+    token, chat_id = env.get("TG_BOT_TOKEN"), env.get("TG_CHAT_ID")
+    cf_url, c_token = env.get("CF_WORKER_URL", "").rstrip("/"), env.get("CLUSTER_TOKEN")
     is_cluster = env.get("CLUSTER_MODE") == "on"
     
     last_update_id = 0
     while True:
         try:
-            if is_cluster:
-                cluster_sync(cf_url, c_token)
-            
-            # Master 节点: 处理 TG 消息
-            if token and chat_id:
-                r = requests.get(f"https://api.telegram.org/bot{token}/getUpdates", 
-                                 params={"offset": last_update_id + 1, "timeout": 20}, timeout=25)
-                if r.status_code == 200:
-                    for update in r.json().get("result", []):
-                        last_update_id = update["update_id"]
-                        msg = update.get("message", {})
-                        text = msg.get("text", "")
-                        if str(msg.get("chat", {}).get("id")) != chat_id: continue
+            if is_cluster: cluster_sync(cf_url, c_token)
+            if not token or not chat_id:
+                time.sleep(10); continue
+
+            r = requests.get(f"https://api.telegram.org/bot{token}/getUpdates", 
+                             params={"offset": last_update_id + 1, "timeout": 20}, timeout=25)
+            if r.status_code == 200:
+                for update in r.json().get("result", []):
+                    last_update_id = update["update_id"]
+                    msg = update.get("message", {})
+                    cb = update.get("callback_query", {})
+                    
+                    if cb:
+                        data = cb.get("data")
+                        cb_msg = cb.get("message", {})
+                        if str(cb_msg.get("chat", {}).get("id")) != chat_id: continue
                         
-                        if text == "/status":
-                            if is_cluster:
-                                all_s = requests.get(f"{cf_url}/all_status", headers={"X-Cluster-Token": c_token}).json()
-                                res = "📊 **集群实时状态**\n"
-                                for nid, s in all_s.items():
-                                    res += f"CID: `{nid}` | Xray: {s['xray']} | Mem: {s['mem']}\n"
-                                requests.post(f"https://api.telegram.org/bot{token}/sendMessage", 
-                                             json={"chat_id": chat_id, "text": res, "parse_mode": "Markdown"})
-                            else:
-                                requests.post(f"https://api.telegram.org/bot{token}/sendMessage", 
-                                             json={"chat_id": chat_id, "text": f"📍 节点 `{NODE_ID}` 状态正常", "parse_mode": "Markdown"})
-        except: time.sleep(10)
-        time.sleep(5)
+                        if data == "status_cluster":
+                            send_action(token, chat_id)
+                            all_s = requests.get(f"{cf_url}/all_status", headers={"X-Cluster-Token": c_token}).json()
+                            res = "📊 <b>集群节点看板 (Pro)</b>\n"
+                            for nid, s in all_s.items():
+                                res += f"🆔 <code>{nid}</code>\n"
+                                res += f" ├ Xray: {s['xray']} | Ver: {s.get('v','v1.0')}\n"
+                                res += f" ├ CPU: {gen_bar(s.get('cpu', 0))}\n"
+                                res += f" └ Mem: {gen_bar(s.get('mem_pct', 0))} ({s.get('mem_used', 'N/A')})\n\n"
+                            send_tg(token, chat_id, res, edit_id=cb_msg.get("message_id"))
+                        elif data.startswith("log_"):
+                            log_type = data.split("_")[1]
+                            send_action(token, chat_id)
+                            logs = run_cmd(f"journalctl -u {log_type} -n 20 --no-pager")[-3500:]
+                            send_tg(token, chat_id, f"📄 <b>{log_type.upper()} 最近日志:</b>\n<pre>{html.escape(logs)}</pre>")
+                        continue
+
+                    text = msg.get("text", "")
+                    if str(msg.get("chat", {}).get("id")) != chat_id: continue
+
+                    if text == "/status":
+                        send_action(token, chat_id)
+                        if is_cluster:
+                            buttons = {"inline_keyboard": [[{"text": "🌐 查看全集群状态", "callback_data": "status_cluster"}]]}
+                            send_tg(token, chat_id, f"📍 <b>当前节点:</b> <code>{NODE_ID}</code>\n请选择查询范围：", reply_markup=buttons)
+                        else:
+                            s = get_status_data()
+                            res = f"📍 <b>节点详情:</b> <code>{NODE_ID}</code>\n"
+                            res += f" ├ Xray: {s['xray']} | Ver: {s['v']}\n"
+                            res += f" ├ CPU: {gen_bar(s['cpu'])}\n"
+                            res += f" └ Mem: {gen_bar(s['mem_pct'])} ({s['mem_used']})"
+                            send_tg(token, chat_id, res)
+                    elif text == "/logs":
+                        btns = {"inline_keyboard": [
+                            [{"text": "🧵 Xray 业务日志", "callback_data": "log_xray"}],
+                            [{"text": "💠 Nginx 访问日志", "callback_data": "log_nginx"}],
+                            [{"text": "🤖 守护进程日志", "callback_data": "log_autovpn-guardian"}]
+                        ]}
+                        send_tg(token, chat_id, "📂 <b>日志查询中心 (Pro)</b>\n请选择日志类型：", reply_markup=btns)
+                    elif text == "/update":
+                        handle_ota(token, chat_id)
+        except Exception as e: 
+            print(f"Error: {e}")
+            time.sleep(5)
+        time.sleep(1)
 
 if __name__ == "__main__":
     main()
@@ -940,7 +1016,16 @@ fi
 # 启动入口
 # =================================================================
 main() {
-    # 仅在非管理状态下且是主运行入口时，执行环境初始化
+    # 如果是 BOT 自动更新，则跳过菜单，直接执行配置并退出
+    if [[ "$AUTO_UPDATE_BOT" == "1" ]]; then
+        log_info ">>> 检测到机器人热更新指令，正在重新部署守护进程..."
+        # 确保目录存在
+        mkdir -p /usr/local/etc/autovpn
+        # 执行机器人配置逻辑 (由脚本中的 setup_guardian_bot 提供)
+        setup_guardian_bot silent
+        log_info "✅ 机器人已完成热更新。"
+        exit 0
+    fi
     show_menu
 }
 
