@@ -269,7 +269,97 @@ DOMAIN="$DOMAIN"
 UUID="$UUID"
 TG_BOT_TOKEN="$TG_BOT_TOKEN"
 TG_CHAT_ID="$TG_CHAT_ID"
+CLUSTER_MODE="$CLUSTER_MODE"
+CF_WORKER_URL="$CF_WORKER_URL"
+CLUSTER_TOKEN="$CLUSTER_TOKEN"
+CF_ACCOUNT_ID="$CF_ACCOUNT_ID"
 EOF
+}
+
+# 辅助：一键部署 Cloudflare Worker
+deploy_cf_worker() {
+    echo -e "\n${CYAN}--- Cloudflare Worker 自动化部署 ---${NC}"
+    echo -e "说明：此操作将自动在你的 CF 账户创建 KV 命名空间并部署中继脚本。"
+    
+    if [[ -z "$CF_ACCOUNT_ID" ]]; then
+        read -p "请输入 Cloudflare Account ID: " CF_ACCOUNT_ID
+    fi
+    read -p "请输入 Cloudflare API Token (需 Workers/KV 修改权限): " CF_API_TOKEN
+    
+    if [[ -z "$CF_ACCOUNT_ID" || -z "$CF_API_TOKEN" ]]; then
+        log_err "Account ID 或 Token 不能为空，取消自动化部署。"
+        return 1
+    fi
+
+    log_info "正在检查/创建 KV 命名空间 (AUTOVPN_STORAGE)..."
+    # 查找现有 KV
+    local kv_list=$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/storage/kv/namespaces" \
+        -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json")
+    
+    local kv_id=$(echo "$kv_list" | jq -r '.result[] | select(.title=="AUTOVPN_STORAGE") | .id')
+    
+    if [[ -z "$kv_id" || "$kv_id" == "null" ]]; then
+        log_info "未发现现有空间，正在创建..."
+        local kv_create=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/storage/kv/namespaces" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
+            -d '{"title":"AUTOVPN_STORAGE"}')
+        kv_id=$(echo "$kv_create" | jq -r '.result.id')
+    fi
+
+    if [[ -z "$kv_id" || "$kv_id" == "null" ]]; then
+        log_err "KV 空间创建失败，请检查 Token 权限。"
+        return 1
+    fi
+    log_info "✅ KV 空间已就绪: ${kv_id}"
+
+    log_info "正在从 GitHub 获取最新的 Worker 脚本..."
+    local worker_js_path="/tmp/autovpn_worker.js"
+    curl -s -o "$worker_js_path" "https://raw.githubusercontent.com/ecolid/autovpn/main/cf_worker_relay.js"
+    
+    # 写入自定义 Token
+    if [[ -z "$CLUSTER_TOKEN" ]]; then
+        CLUSTER_TOKEN=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
+    fi
+    sed -i "s/your_private_token_here/${CLUSTER_TOKEN}/g" "$worker_js_path"
+
+    log_info "正在部署 Worker 脚本 (autovpn-relay)..."
+    # 准备元数据
+    cat > /tmp/worker_metadata.json <<EOF
+{
+  "main_module": "worker.js",
+  "bindings": [
+    {
+      "type": "kv_namespace",
+      "name": "STATUS_KV",
+      "namespace_id": "${kv_id}"
+    }
+  ]
+}
+EOF
+
+    local deploy_res=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/autovpn-relay" \
+        -H "Authorization: Bearer ${CF_API_TOKEN}" \
+        -F "metadata=@/tmp/worker_metadata.json;type=application/json" \
+        -F "worker.js=@${worker_js_path};type=application/javascript+module")
+
+    if [[ $(echo "$deploy_res" | jq -r '.success') != "true" ]]; then
+        log_err "Worker 部署失败: $(echo "$deploy_res" | jq -r '.errors[0].message')"
+        return 1
+    fi
+    
+    # 获取子域名以构建 URL
+    local subdomain_res=$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/subdomain" \
+        -H "Authorization: Bearer ${CF_API_TOKEN}")
+    local subdomain=$(echo "$subdomain_res" | jq -r '.result.subdomain')
+    
+    CF_WORKER_URL="https://autovpn-relay.${subdomain}.workers.dev"
+    CLUSTER_MODE="on"
+    save_env
+    
+    log_info "✅ Worker 部署成功！"
+    echo -e "Worker URL: ${MAGENTA}${CF_WORKER_URL}${NC}"
+    echo -e "Cluster Token: ${MAGENTA}${CLUSTER_TOKEN}${NC}"
+    return 0
 }
 
 # 辅助：配置 Guardian Bot (Python 交互式机器人 & 集群增强)
@@ -281,23 +371,44 @@ setup_guardian_bot() {
         apt-get update &> /dev/null && apt-get install -y python3 python3-requests &> /dev/null
     fi
 
+    # 已开启集群模式下的管理菜单
+    if [[ "$CLUSTER_MODE" == "on" ]]; then
+        echo -e "\n${CYAN}--- Guardian Cluster (已开启) ---${NC}"
+        echo -e "1. 刷新本地守护进程 (重启服务)"
+        echo -e "2. 检查并更新云端中继 (Cloudflare Worker)"
+        echo -e "3. 重新配置集群信息 (手动/自动)"
+        echo -e "0. 返回"
+        read -p "请选择: " cluster_mgr_choice
+        case $cluster_mgr_choice in
+            1) systemctl restart autovpn-guardian; log_info "守护进程已重启"; return ;;
+            2) deploy_cf_worker; return ;;
+            3) unset CLUSTER_MODE ;; # 进入下方的配置逻辑
+            *) return ;;
+        esac
+    fi
+
     # 集群模式选择
-    if [[ -z "$CLUSTER_MODE" ]]; then
+    if [[ -z "$CLUSTER_MODE" || "$CLUSTER_MODE" == "off" ]]; then
         echo -e "\n${CYAN}--- Guardian Cluster 集群配置 ---${NC}"
         echo -e "1. 独立运行 (单机 Telegram 控制)"
-        echo -e "2. 开启集群模式 (通过 Cloudflare Workers 中继)"
-        read -p "请选择模式 [1/2, 默认 1]: " cluster_choice
-        if [[ "$cluster_choice" == "2" ]]; then
-            CLUSTER_MODE="on"
-            read -p "请输入 Cloudflare Worker URL: " CF_WORKER_URL
-            read -p "请输入集群通讯 Token (自定义安全字符串): " CLUSTER_TOKEN
-            save_env "CLUSTER_MODE" "$CLUSTER_MODE"
-            save_env "CF_WORKER_URL" "$CF_WORKER_URL"
-            save_env "CLUSTER_TOKEN" "$CLUSTER_TOKEN"
-        else
-            CLUSTER_MODE="off"
-            save_env "CLUSTER_MODE" "off"
-        fi
+        echo -e "2. 使用 Cloudflare Worker (全自动一键部署)"
+        echo -e "3. 使用 Cloudflare Worker (手动填入已有信息)"
+        read -p "请选择模式 [1/2/3, 默认 1]: " cluster_choice
+        case $cluster_choice in
+            2)
+                deploy_cf_worker || { echo "切换到手动模式..."; read -p "请输入 Cloudflare Worker URL: " CF_WORKER_URL; read -p "请输入集群通讯 Token: " CLUSTER_TOKEN; CLUSTER_MODE="on"; }
+                ;;
+            3)
+                CLUSTER_MODE="on"
+                read -p "请输入 Cloudflare Worker URL: " CF_WORKER_URL
+                read -p "请输入集群通讯 Token: " CLUSTER_TOKEN
+                save_env
+                ;;
+            *)
+                CLUSTER_MODE="off"
+                save_env
+                ;;
+        esac
     fi
 
     # 创建驱动脚本
