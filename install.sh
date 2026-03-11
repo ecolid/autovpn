@@ -83,6 +83,23 @@ load_config() {
             log_info "正在停用旧服务并接管管理权..."
             systemctl stop xray v2ray sing-box 2>/dev/null || true
             systemctl disable xray v2ray sing-box 2>/dev/null || true
+            
+            # 提取第一个发现的配置路径
+            local first_path=$(echo -e "$DISCOVERY_INFO" | grep "路径=" | head -n 1 | awk -F'路径=' '{print $2}' | awk -F',' '{print $1}')
+            if [ -f "$first_path" ]; then
+                log_info "正在尝试从 $first_path 提取关键配置信息..."
+                EXT_UUID=$(jq -r '.inbounds[0].settings.clients[0].id' "$first_path" 2>/dev/null || grep -oP '"id":\s*"[a-f0-9-]{36}"' "$first_path" | head -n1 | grep -oP '[a-f0-9-]{36}')
+                EXT_PORT=$(jq -r '.inbounds[0].port' "$first_path" 2>/dev/null || grep -oP '"port":\s*\d+' "$first_path" | head -n1 | grep -oP '\d+')
+                EXT_PATH=$(jq -r '.inbounds[0].streamSettings.wsSettings.path' "$first_path" 2>/dev/null || grep -oP '"path":\s*"[^"]+"' "$first_path" | head -n1 | grep -oP '"[^"]+"$' | tr -d '"')
+                
+                # 持久化提取到的变量
+                UUID="${EXT_UUID:-$UUID}"
+                XRAY_PORT="${EXT_PORT:-$XRAY_PORT}"
+                WS_PATH="${EXT_PATH:-$WS_PATH}"
+                save_env
+                log_info "✅ 配置提取成功：UUID=$UUID, Port=$XRAY_PORT"
+            fi
+            
             mkdir -p /usr/local/etc/autovpn
             touch "$ENV_PATH"
             IS_MANAGED_BY_AUTOVPN=true
@@ -92,9 +109,9 @@ load_config() {
         fi
     fi
 
-    # 4. 如果已管理，解析现有配置
-    if [ "$IS_MANAGED_BY_AUTOVPN" == "true" ] && [ -f "$CONFIG_PATH" ]; then
-        # 尝试检测 Xray 配置类型
+    # 4. 解析现有配置 (无论原生还是接管)
+    if [ -f "$CONFIG_PATH" ]; then
+        # 优先读取 Xray 配置文件中的实时数据
         if grep -q "reality" "$CONFIG_PATH"; then
             EXISTING_MODE="Reality"
             EXISTING_UUID=$(jq -r '.inbounds[0].settings.clients[0].id' "$CONFIG_PATH" 2>/dev/null)
@@ -106,6 +123,108 @@ load_config() {
             EXISTING_PATH=$(jq -r '.inbounds[0].streamSettings.wsSettings.path' "$CONFIG_PATH" 2>/dev/null)
             EXISTING_DOMAIN=$(ls /etc/nginx/sites-available/ | grep ".conf" | head -n 1 | sed 's/.conf//')
         fi
+    fi
+    
+    [ -z "$EXISTING_PORT" ] && EXISTING_PORT="$XRAY_PORT"
+}
+
+# 辅助：防火墙端口开放
+open_ports() {
+    local port=$1
+    log_info "正在尝试开放端口: $port..."
+    if command -v ufw &> /dev/null; then
+        ufw allow $port/tcp &> /dev/null
+        ufw allow $port/udp &> /dev/null
+    fi
+    if command -v iptables &> /dev/null; then
+        iptables -I INPUT -p tcp --dport $port -j ACCEPT &> /dev/null
+        iptables -I INPUT -p udp --dport $port -j ACCEPT &> /dev/null
+    fi
+}
+
+# 辅助：显示分享链接
+show_link() {
+    clear
+    load_config
+    if [ -z "$EXISTING_MODE" ]; then
+        log_err "未检测到有效安装，无法生成链接。"
+        read -p "按回车返回..."
+        return
+    fi
+    
+    IP=$(curl -s https://ipv4.icanhazip.com)
+    echo -e "${GREEN}==================== 当前连接信息 ====================${PLAIN}"
+    if [ "$EXISTING_MODE" == "Reality" ]; then
+        # 尝试从配置中抓取 Public Key (如果存在)
+        PUBLIC_KEY=$(jq -r '.inbounds[0].streamSettings.realitySettings.publicKey' "$CONFIG_PATH" 2>/dev/null || echo "需重装获取")
+        SHORT_ID=$(jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0]' "$CONFIG_PATH" 2>/dev/null || echo "需重装获取")
+        LINK="vless://${EXISTING_UUID}@${IP}:${EXISTING_PORT}?encryption=none&security=reality&sni=${EXISTING_SNI}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&flow=xtls-rprx-vision#AutoVPN_Reality"
+    else
+        LINK="vless://${EXISTING_UUID}@${EXISTING_DOMAIN}:443?encryption=none&security=tls&type=ws&host=${EXISTING_DOMAIN}&sni=${EXISTING_DOMAIN}&path=$(echo $EXISTING_PATH | sed 's/\//%2F/g')#AutoVPN_WS_CDN"
+    fi
+    
+    echo -e "模式: ${BLUE}$EXISTING_MODE${PLAIN}"
+    echo -e "UUID: ${BLUE}$EXISTING_UUID${PLAIN}"
+    echo -e "\n分享链接:"
+    echo -e "${GREEN}$LINK${PLAIN}"
+    echo -e "${GREEN}======================================================${PLAIN}"
+    read -p "按回车返回菜单..."
+}
+
+# 辅助：日志查看
+show_logs() {
+    while true; do
+        clear
+        echo -e "${BLUE}==================== 日志管理中心 ====================${PLAIN}"
+        echo -e "  ${GREEN}1.${PLAIN} 查看 Xray 运行日志 (最后 50 行)"
+        echo -e "  ${GREEN}2.${PLAIN} 查看 Nginx 访问日志 (WS-TLS 模式)"
+        echo -e "  ${GREEN}3.${PLAIN} 查看 Nginx 错误日志"
+        echo -e "  ${GREEN}0.${PLAIN} 返回主菜单"
+        read -p "请选择: " log_choice
+        case $log_choice in
+            1) journalctl -u xray --no-pager -n 50 ;;
+            2) [ -f /var/log/nginx/access.log ] && tail -n 50 /var/log/nginx/access.log || echo "日志文件不存在" ;;
+            3) [ -f /var/log/nginx/error.log ] && tail -n 50 /var/log/nginx/error.log || echo "日志文件不存在" ;;
+            0) break ;;
+        esac
+        read -p "按回车继续..."
+    done
+}
+
+# 辅助：服务管理
+manage_services() {
+    while true; do
+        clear
+        echo -e "${BLUE}==================== 服务控制中心 ====================${PLAIN}"
+        echo -e "  ${GREEN}1.${PLAIN} 重启所有服务 (Xray/Nginx)"
+        echo -e "  ${GREEN}2.${PLAIN} 停止所有服务"
+        echo -e "  ${GREEN}3.${PLAIN} 启动所有服务"
+        echo -e "  ${GREEN}0.${PLAIN} 返回主菜单"
+        read -p "请选择: " svc_choice
+        case $svc_choice in
+            1) systemctl restart xray; systemctl restart nginx 2>/dev/null; log_info "已重启" ;;
+            2) systemctl stop xray; systemctl stop nginx 2>/dev/null; log_info "已停止" ;;
+            3) systemctl start xray; systemctl start nginx 2>/dev/null; log_info "已启动" ;;
+            0) break ;;
+        esac
+        read -p "按回车继续..."
+    done
+}
+
+# 辅助：完全卸载
+uninstall_all() {
+    echo -e "${RED}警告：此操作将彻底删除 Xray, Nginx, acme.sh 以及所有配置和网站数据！${PLAIN}"
+    read -p "确定要彻底卸载吗？ [y/N]: " confirm
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        log_info "正在清理系统..."
+        systemctl stop xray nginx warp-svc 2>/dev/null || true
+        systemctl disable xray nginx warp-svc 2>/dev/null || true
+        apt purge -y xray nginx cloudflare-warp 2>/dev/null || true
+        rm -rf /usr/local/etc/xray /etc/nginx/sites-enabled/* /etc/nginx/sites-available/* /var/www/html/*
+        rm -rf /usr/local/etc/autovpn ~/.acme.sh
+        rm -f /etc/systemd/system/xray.service /swapfile
+        log_info "✅ 卸载完成，系统已恢复纯净。"
+        exit 0
     fi
 }
 
@@ -264,6 +383,7 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload && systemctl enable xray && systemctl restart xray
+    open_ports $XRAY_PORT
     save_env
     
     # 结果输出
@@ -475,49 +595,56 @@ if [ ! -z "$EXISTING_MODE" ]; then
         echo -e "  - WARP 出口 IP: ${BLUE}$WARP_IP${PLAIN}"
     fi
 
-    echo ""
     echo -e "  ${GREEN}1.${PLAIN} 更新/重装当前模式 (可修改配置)"
     echo -e "  ${GREEN}2.${PLAIN} 切换到另一种模式"
-    echo -e "  ${GREEN}3.${PLAIN} 刷新 WARP 出口 IP"
-    echo -e "  ${GREEN}4.${PLAIN} 重置 WARP 注册信息"
-    echo -e "  ${GREEN}5.${PLAIN} 卸载 AutoVPN (清理 Xray/Nginx)"
+    echo -e "  ${GREEN}3.${PLAIN} 查看/获取当前分享链接"
+    echo -e "  ${GREEN}4.${PLAIN} 服务管理 (启动/停止/重启)"
+    echo -e "  ${GREEN}5.${PLAIN} 日志管理 (查看运行日志)"
+    echo -e "  ${GREEN}6.${PLAIN} WARP 隧道管理 (刷新 IP/重置)"
+    echo -e "  ${GREEN}7.${PLAIN} 防火墙管理 (自动开放端口)"
+    echo -e "  ${GREEN}9.${PLAIN} 彻底卸载 AutoVPN"
     echo -e "  ${GREEN}0.${PLAIN} 退出"
+    read -p "请选择: " choice
+
+    case $choice in
+        1) optimize_system; [ "$EXISTING_MODE" == "Reality" ] && install_reality || install_ws_tls ;;
+        2) optimize_system; [ "$EXISTING_MODE" == "Reality" ] && install_ws_tls || install_reality ;;
+        3) show_link ;;
+        4) manage_services ;;
+        5) show_logs ;;
+        6) 
+            echo -e "1. 刷新 WARP IP\n2. 重置 WARP 注册"
+            read -p "选项: " wc
+            [ "$wc" == "1" ] && manage_warp "refresh" || manage_warp "reset"
+            ;;
+        7) open_ports 80; open_ports 443; [ ! -z "$EXISTING_PORT" ] && open_ports $EXISTING_PORT; log_info "防火墙策略已更新。" ;;
+        9) uninstall_all ;;
+        0) exit 0 ;;
+        *) log_err "无效输入"; show_menu ;;
+    esac
 else
     echo -e "  ${GREEN}1.${PLAIN} 安装 VLESS-Reality (推荐：简单/免域名/高性能)"
     echo -e "  ${GREEN}2.${PLAIN} 安装 VLESS-WS-TLS (CDN/强伪装/需已有域名)"
+    echo -e "  ${GREEN}3.${PLAIN} 仅进行系统环境优化 (BBR/Swap)"
     echo -e "  ${GREEN}0.${PLAIN} 退出脚本"
-fi
-
-echo ""
-read -p "请输入数字: " choice
-
-if [ ! -z "$EXISTING_MODE" ]; then
-    case $choice in
-        1)
-            optimize_system
-            [ "$EXISTING_MODE" == "Reality" ] && install_reality || install_ws_tls
-            ;;
-        2)
-            optimize_system
-            [ "$EXISTING_MODE" == "Reality" ] && install_ws_tls || install_reality
-            ;;
-        3) manage_warp "refresh" ;;
-        4) manage_warp "reset" ;;
-        5)
-            log_warn "正在清理卸载..."
-            systemctl stop xray nginx warp-svc || true
-            apt purge -y cloudflare-warp nginx xray || true
-            rm -rf /usr/local/etc/xray /etc/nginx/sites-enabled/* /usr/local/etc/autovpn
-            log_info "✅ 卸载完成"
-            ;;
-        0) exit 0 ;;
-        *) log_err "输入无效"; exit 1 ;;
-    esac
-else
+    echo ""
+    read -p "请选择: " choice
     case $choice in
         1) optimize_system; install_reality ;;
         2) optimize_system; install_ws_tls ;;
+        3) optimize_system; log_info "系统优化完成。"; read -p "回车返回..." ;;
         0) exit 0 ;;
-        *) log_err "输入无效"; exit 1 ;;
+        *) log_err "无效输入"; show_menu ;;
     esac
 fi
+}
+
+# =================================================================
+# 启动入口
+# =================================================================
+main() {
+    # 仅在非管理状态下且是主运行入口时，执行环境初始化
+    show_menu
+}
+
+main
