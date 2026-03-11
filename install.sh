@@ -358,25 +358,23 @@ EOF
         return 1
     fi
     
-    # [v1.3.0] 创建 D1 数据库
-    log_info "正在配置云端 D1 数据库 (v1.3.0)..."
+    # [v1.4.0] 创建 D1 数据库并初始化 Schema
+    log_info "正在配置云端 D1 数据库 (v1.4.0)..."
     local d1_res=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database" \
         -H "Authorization: Bearer ${CF_API_TOKEN}" \
         -H "Content-Type: application/json" \
         -d '{"name": "autovpn_db"}')
     local d1_id=$(echo "$d1_res" | jq -r '.result.uuid')
-    # 如果已存在会报错，尝试直接获取 ID
     if [[ "$d1_id" == "null" ]]; then
         d1_id=$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database" \
             -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result[] | select(.name=="autovpn_db") | .uuid')
     fi
     echo "$d1_id" > /usr/local/etc/autovpn/.d1_id
 
-    # 初始化 Schema
-    log_info "正在初始化 SQL 表结构..."
+    log_info "正在初始化任务编排 SQL 表结构..."
     local sql_init="
         CREATE TABLE IF NOT EXISTS nodes (id TEXT PRIMARY KEY, cpu REAL, mem_pct REAL, v TEXT, t INTEGER, is_selected INTEGER DEFAULT 0, alert_sent INTEGER DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS commands (id INTEGER PRIMARY KEY AUTOINCREMENT, target_id TEXT, cmd TEXT, task_id INTEGER, status TEXT DEFAULT 'pending');
+        CREATE TABLE IF NOT EXISTS commands (id INTEGER PRIMARY KEY AUTOINCREMENT, target_id TEXT, cmd TEXT, task_id INTEGER, result TEXT, status TEXT DEFAULT 'pending', completed_at INTEGER);
         CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, val TEXT);
         INSERT OR REPLACE INTO config (key, val) VALUES ('BOT_TOKEN', '$TG_BOT_TOKEN');
         INSERT OR REPLACE INTO config (key, val) VALUES ('CHAT_ID', '$TG_CHAT_ID');
@@ -390,7 +388,6 @@ EOF
     log_info "正在上传并绑定 Worker 脚本..."
     local worker_js=$(cat /usr/local/etc/autovpn/cf_worker_relay.js | sed "s/your_private_token_here/${CLUSTER_TOKEN}/g")
     
-    # 构造带绑定的 Multipart 上传
     cat > /tmp/metadata.json <<EOF
 {
   "main_module": "index.js",
@@ -408,8 +405,8 @@ EOF
     curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/setWebhook" \
         -d "url=https://autovpn-relay.$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/subdomain" -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result.subdomain').workers.dev/webhook" > /dev/null
 
-    log_info "✅ D1 全量集群主控已激活！"
-    echo -e "Cluster Mode: ${CYAN}D1 SQL (v1.3.0)${NC}"
+    log_info "✅ D1 编排中心已激活！"
+    echo -e "Cluster Mode: ${CYAN}D1 SQL (v1.4.0)${NC}"
     return 0
 }
 
@@ -465,61 +462,58 @@ setup_guardian_bot() {
         fi
     fi
 
-    # 创建驱动脚本 (v1.3.0 - D1 SQL Passive Agent)
+    # 创建驱动脚本 (v1.4.0 - Orchestration Agent)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
-import requests, time, subprocess, os, json, sys, socket, html
+import requests, time, subprocess, os, json, sys, socket
 
-VERSION = "v1.3.0"
+VERSION = "v1.4.0"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
 
-def load_env():
-    env = {}
-    if os.path.exists(ENV_PATH):
-        with open(ENV_PATH, "r") as f:
-            for line in f:
-                if "=" in line:
-                    parts = line.strip().split("=", 1)
-                    k = parts[0]
-                    v = parts[1].replace('"', '') if len(parts) > 1 else ""
-                    env[k] = v.strip()
-    return env
-
 def run_cmd(cmd):
-    try: return subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.STDOUT)
-    except Exception as e: return str(e)
+    try:
+        # 执行 autovpn 原生指令
+        if cmd.startswith("--") or " " in cmd:
+            full_cmd = f"bash /usr/local/bin/autovpn {cmd}"
+        else:
+            full_cmd = f"bash /usr/local/bin/autovpn --{cmd}" # 补齐前缀
+        
+        proc = subprocess.Popen(full_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        out, _ = proc.communicate(timeout=60)
+        # 提取最后几行作为关键结果
+        lines = [l for l in out.split("\n") if l.strip()]
+        return "\n".join(lines[-5:]) if lines else "执行完成 (无回显)"
+    except Exception as e: return f"Error: {str(e)}"
 
-def get_status_data():
-    cpu = run_cmd("top -bn1 | grep 'Cpu(s)' | awk '{print $2}'").strip() or "0"
-    mem_pct = run_cmd("free | grep Mem | awk '{print $3/$2 * 100.0}'").strip() or "0"
-    return {"id": NODE_ID, "cpu": cpu, "mem_pct": mem_pct, "v": VERSION}
+def get_status_data(tid=None, res=None):
+    cpu = subprocess.getoutput("top -bn1 | grep 'Cpu(s)' | awk '{print $2}'")
+    mem = subprocess.getoutput("free | grep Mem | awk '{print $3/$2 * 100.0}'")
+    data = {"id": NODE_ID, "cpu": cpu or "0", "mem_pct": mem or "0", "v": VERSION}
+    if tid: data["task_id"] = tid; data["result"] = res
+    return data
 
 def main():
-    env = load_env()
-    cf_url = env.get("CF_WORKER_URL", "").rstrip("/")
-    c_token = env.get("CLUSTER_TOKEN")
-    
-    if not cf_url or not c_token: sys.exit(1)
-
-    headers = {"X-Cluster-Token": c_token}
-    print(f"AutoVPN Guardian {VERSION} (D1 Edition) started.")
-    
     while True:
         try:
-            # 高频心跳 (针对 D1 每日 10w 次额度优化)
-            r = requests.post(f"{cf_url}/report", json=get_status_data(), headers=headers, timeout=10)
+            with open(ENV_PATH, "r") as f:
+                env = {l.split("=")[0]: l.split("=")[1].strip().replace('"','') for l in f if "=" in l}
+            cf_url, c_token = env.get("CF_WORKER_URL", "").rstrip("/"), env.get("CLUSTER_TOKEN")
+            if not cf_url: break
+
+            # 1. 心跳 & 读取任务
+            r = requests.post(f"{cf_url}/report", json=get_status_data(), headers={"X-Cluster-Token": c_token}, timeout=10)
             if r.status_code == 200:
                 task = r.json()
-                cmd = task.get("cmd")
-                if cmd == "--update-bot":
-                    os.system("curl -sL https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh | bash -s -- --update-bot &")
-                elif cmd:
-                    run_cmd(f"bash /usr/local/bin/autovpn {cmd}")
+                if task.get("cmd"):
+                    # 2. 执行并带回执上报
+                    print(f"Executing: {task['cmd']}")
+                    res = run_cmd(task['cmd'])
+                    requests.post(f"{cf_url}/report", json=get_status_data(tid=task['task_id'], res=res), 
+                                 headers={"X-Cluster-Token": c_token}, timeout=10)
         except: pass
-        time.sleep(30) # 30秒一次心跳，支持 Watchdog 报警
+        time.sleep(30)
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
 EOF
     chmod +x /usr/local/etc/autovpn/guardian.py
 
