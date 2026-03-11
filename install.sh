@@ -480,10 +480,13 @@ def run_cmd(cmd):
         
         proc = subprocess.Popen(full_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         out, _ = proc.communicate(timeout=60)
-        # 提取最后几行作为关键结果
+        
+        # [v1.4.1] 状态感知：区分成功与失败
+        status = "✅ 成功" if proc.returncode == 0 else "❌ 失败"
         lines = [l for l in out.split("\n") if l.strip()]
-        return "\n".join(lines[-5:]) if lines else "执行完成 (无回显)"
-    except Exception as e: return f"Error: {str(e)}"
+        summary = "\n".join(lines[-5:]) if lines else "无脚本回显"
+        return f"{status} (退出码: {proc.returncode})\n{summary}"
+    except Exception as e: return f"❌ 执行异常: {str(e)}"
 
 def get_status_data(tid=None, res=None):
     cpu = subprocess.getoutput("top -bn1 | grep 'Cpu(s)' | awk '{print $2}'")

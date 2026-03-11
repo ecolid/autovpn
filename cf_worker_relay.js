@@ -43,11 +43,13 @@ export default {
                 await env.DB.prepare("UPDATE commands SET result = ?, status = 'done', completed_at = ? WHERE task_id = ?")
                     .bind(data.result, now, data.task_id).run();
 
-                // Notify User of completion
+                // [v1.4.1] 状态感知通知
                 const BOT_TOKEN = await getConfig(env, "BOT_TOKEN");
                 const CHAT_ID = await getConfig(env, "CHAT_ID");
                 if (BOT_TOKEN && CHAT_ID) {
-                    await sendTelegram(BOT_TOKEN, CHAT_ID, `✅ <b>任务执行报告</b>\n节点: <code>${data.id}</code>\n结果: <code>${data.result.substring(0, 1000)}</code>`);
+                    const isSuccess = data.result.includes("✅");
+                    const title = isSuccess ? "✅ <b>任务执行成功</b>" : "❌ <b>任务执行失败</b>";
+                    await sendTelegram(BOT_TOKEN, CHAT_ID, `${title}\n节点: <code>${data.id}</code>\n回显详情:\n<pre>${data.result.substring(0, 1000)}</pre>`);
                 }
             }
 
