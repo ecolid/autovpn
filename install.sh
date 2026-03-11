@@ -272,53 +272,130 @@ TG_CHAT_ID="$TG_CHAT_ID"
 EOF
 }
 
-# 辅助：定时任务 (TG 巡检)
-setup_monitor_task() {
+# 辅助：配置 Guardian Bot (Python 交互式机器人)
+setup_guardian_bot() {
     if [ ! -z "$TG_BOT_TOKEN" ] && [ ! -z "$TG_CHAT_ID" ]; then
-        log_info "正在配置 TG 每日巡检定时任务..."
+        log_info "正在配置 AutoVPN Guardian Bot..."
         
-        # 创建巡检脚本
-        cat > /usr/local/etc/autovpn/monitor.sh <<'EOF'
-#!/usr/bin/env bash
-source /usr/local/etc/autovpn/.env
-IP=$(curl -s https://ipv4.icanhazip.com)
-XRAY_STATUS=$(systemctl is-active xray)
-WARP_STATUS=$(systemctl is-active warp-svc)
-MEM_USAGE=$(free -m | awk '/Mem:/{printf "%.1f%%", $3/$2*100}')
+        # 创建守护脚本
+        cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
+import requests, time, subprocess, os, json, sys
 
-MSG="🔍 *AutoVPN 每日巡检报告*\n\n"
-MSG+="📍 *公网 IP:* ${IP}\n"
-MSG+="⚙️ *Xray 状态:* ${XRAY_STATUS}\n"
-MSG+="🛡️ *WARP 状态:* ${WARP_STATUS}\n"
-MSG+="📊 *内存占用:* ${MEM_USAGE}\n\n"
-MSG+="✨ 系统运行正常，祝你使用愉快！"
+ENV_PATH = "/usr/local/etc/autovpn/.env"
+CONFIG_PATH = "/usr/local/etc/xray/config.json"
 
-curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
-    -d "chat_id=${TG_CHAT_ID}" -d "text=${MSG}" -d "parse_mode=Markdown" > /dev/null
+def load_env():
+    env = {}
+    if os.path.exists(ENV_PATH):
+        with open(ENV_PATH, "r") as f:
+            for line in f:
+                if "=" in line:
+                    k, v = line.strip().split("=", 1)
+                    env[k] = v.strip('"')
+    return env
+
+ENV = load_env()
+BOT_TOKEN = ENV.get("TG_BOT_TOKEN")
+CHAT_ID = ENV.get("TG_CHAT_ID")
+API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+def run_cmd(cmd):
+    try: return subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.STDOUT)
+    except Exception as e: return str(e)
+
+def get_status():
+    ip = run_cmd("curl -s https://ipv4.icanhazip.com").strip()
+    xray = "✅ 运行中" if "active" in run_cmd("systemctl is-active xray") else "❌ 已停止"
+    warp = "✅ 运行中" if "active" in run_cmd("systemctl is-active warp-svc") else "❌ 已停止"
+    mem = run_cmd("free -m | awk '/Mem:/{printf \"%.1f%%\", $3/$2*100}'").strip()
+    return f"🔍 *AutoVPN 实时状态*\n\n📍 *IP:* `{ip}`\n⚙️ *Xray:* {xray}\n🛡️ *WARP:* {warp}\n📊 *内存:* {mem}"
+
+def get_link():
+    env = load_env()
+    uuid = env.get("UUID")
+    domain = env.get("DOMAIN")
+    ip = run_cmd("curl -s https://ipv4.icanhazip.com").strip()
+    
+    # 简单的配置解析
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH, 'r') as f:
+            config = f.read()
+            if "reality" in config:
+                port = run_cmd("jq -r '.inbounds[0].port' " + CONFIG_PATH).strip()
+                sni = run_cmd("jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' " + CONFIG_PATH).strip()
+                pbk = run_cmd("jq -r '.inbounds[0].streamSettings.realitySettings.publicKey' " + CONFIG_PATH).strip()
+                sid = run_cmd("jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0]' " + CONFIG_PATH).strip()
+                return f"vless://{uuid}@{ip}:{port}?encryption=none&security=reality&sni={sni}&fp=chrome&pbk={pbk}&sid={sid}&type=tcp&flow=xtls-rprx-vision#AutoVPN_Reality"
+            elif "ws" in config:
+                path = run_cmd("jq -r '.inbounds[0].streamSettings.wsSettings.path' " + CONFIG_PATH).strip()
+                return f"vless://{uuid}@{domain}:443?encryption=none&security=tls&type=ws&host={domain}&sni={domain}&path={path}#AutoVPN_WS_CDN"
+    return "❌ 无法提取配置"
+
+def send_msg(text):
+    requests.post(f"{API_URL}/sendMessage", json={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
+
+def main():
+    last_update_id = 0
+    log_info_msg = "🛡️ *AutoVPN Guardian 已上线*\n使用 /status, /link, /restart, /logs 指令进行管理。"
+    send_msg(log_info_msg)
+    
+    while True:
+        try:
+            r = requests.get(f"{API_URL}/getUpdates", params={"offset": last_update_id + 1, "timeout": 30}, timeout=35)
+            if r.status_code == 200:
+                data = r.json()
+                for update in data.get("result", []):
+                    last_update_id = update["update_id"]
+                    msg = update.get("message", {})
+                    text = msg.get("text", "")
+                    cid = str(msg.get("chat", {}).get("id", ""))
+                    
+                    if cid != CHAT_ID: continue
+                    
+                    if text == "/status":
+                        send_msg(get_status())
+                    elif text == "/link":
+                        send_msg(f"🔗 *您的连接链接:*\n`{get_link()}`")
+                    elif text == "/restart":
+                        send_msg("🔄 正在尝试重启 Xray...")
+                        run_cmd("systemctl restart xray")
+                        send_msg("✅ 重启指令已发送")
+                    elif text == "/logs":
+                        logs = run_cmd("journalctl -u xray -n 20 --no-pager")
+                        send_msg(f"📝 *最近 20 行日志:*\n```\n{logs}\n```")
+                    elif text == "/start":
+                        send_msg("👋 欢迎使用 AutoVPN Guardian！\n\n可用指令：\n/status - 查看运行状态\n/link - 获取订阅链接\n/restart - 重启 Xray\n/logs - 查看运行日志")
+        except Exception as e:
+            time.sleep(5)
+
+if __name__ == "__main__":
+    main()
 EOF
-        chmod +x /usr/local/etc/autovpn/monitor.sh
+        chmod +x /usr/local/etc/autovpn/guardian.py
 
-        # 创建 Systemd Service & Timer
-        cat > /etc/systemd/system/autovpn-monitor.service <<EOF
+        # 创建 Systemd Service
+        cat > /etc/systemd/system/autovpn-guardian.service <<EOF
 [Unit]
-Description=AutoVPN Daily Monitor
+Description=AutoVPN Guardian Bot
+After=network.target
+
 [Service]
-ExecStart=/usr/local/etc/autovpn/monitor.sh
-EOF
+ExecStart=/usr/bin/python3 /usr/local/etc/autovpn/guardian.py
+Restart=always
+RestartSec=10
 
-        cat > /etc/systemd/system/autovpn-monitor.timer <<EOF
-[Unit]
-Description=Run AutoVPN Monitor Daily
-[Timer]
-OnCalendar=daily
-Persistent=true
 [Install]
-WantedBy=timers.target
+WantedBy=multi-user.target
 EOF
 
         systemctl daemon-reload
-        systemctl enable autovpn-monitor.timer && systemctl start autovpn-monitor.timer
-        log_info "✅ 定时巡检任务已启动 (每日自动运行)"
+        systemctl enable autovpn-guardian.service && systemctl restart autovpn-guardian.service
+        log_info "✅ Guardian Bot 交互服务已启动"
+        
+        # 清理旧的任务
+        systemctl stop autovpn-monitor.timer 2>/dev/null || true
+        systemctl disable autovpn-monitor.timer 2>/dev/null || true
+        rm -f /etc/systemd/system/autovpn-monitor.*
     fi
 }
 
@@ -330,7 +407,7 @@ optimize_system() {
     
     # 安装基础依赖
     apt update -y > /dev/null
-    apt install -y curl unzip socat nginx git uuid-runtime gnupg lsb-release jq openssl > /dev/null
+    apt install -y curl unzip socat nginx git uuid-runtime gnupg lsb-release jq openssl python3-requests > /dev/null
 
     # 1.1 BBR 加速检查
     local current_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "unknown")
@@ -483,7 +560,7 @@ EOF
     
     # TG 通知与监控
     send_tg_msg "✅ *AutoVPN Reality 部署成功!*\n\n📍 *IP:* ${IP}\n🔑 *UUID:* ${UUID}\n🔗 *链接:* \`${LINK}\`"
-    setup_monitor_task
+    setup_guardian_bot
 }
 
 # =================================================================
@@ -612,7 +689,7 @@ EOF
 
     # TG 通知与监控
     send_tg_msg "✅ *AutoVPN WS-TLS 部署成功!*\n\n📍 *域名:* ${DOMAIN}\n🔑 *UUID:* ${UUID}\n🔗 *链接:* \`${LINK}\`"
-    setup_monitor_task
+    setup_guardian_bot
 }
 
 # =================================================================
@@ -707,7 +784,7 @@ if [ ! -z "$EXISTING_MODE" ]; then
             [ "$wc" == "1" ] && manage_warp "refresh" || manage_warp "reset"
             ;;
         7) open_ports 80; open_ports 443; [ ! -z "$EXISTING_PORT" ] && open_ports $EXISTING_PORT; log_info "防火墙策略已更新。" ;;
-        8) config_tg_bot; setup_monitor_task ;;
+        8) config_tg_bot; setup_guardian_bot ;;
         9) uninstall_all ;;
         0) exit 0 ;;
         *) log_err "无效输入"; show_menu ;;
