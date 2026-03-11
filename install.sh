@@ -425,13 +425,16 @@ setup_guardian_bot() {
         fi
     fi
 
-    # 创建驱动脚本 (Pro 版 - 汲取 OpenClaw 经验)
+    # 创建驱动脚本 (Pro v1.1.5 - 汲取 OpenClaw 经验 + 多选升级 UI)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, sys, socket, re, html
 
-VERSION = "v1.1.0"
+VERSION = "v1.1.5"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
+
+# 升级状态注册表 (msg_id -> set of selected_node_ids)
+update_registry = {}
 
 def load_env():
     env = {}
@@ -439,7 +442,9 @@ def load_env():
         with open(ENV_PATH, "r") as f:
             for line in f:
                 if "=" in line:
-                    k, v = line.strip().split("=", 1).replace('"', '')
+                    parts = line.strip().split("=", 1)
+                    k = parts[0]
+                    v = parts[1].replace('"', '') if len(parts) > 1 else ""
                     env[k] = v.strip()
     return env
 
@@ -491,15 +496,9 @@ def cluster_sync(cf_url, c_token):
                 requests.post(f"{cf_url}/result", json={"task_id": task['task_id'], "result": res}, headers=headers)
     except: pass
 
-def handle_ota(token, chat_id):
-    send_tg(token, chat_id, "🔍 正在从 GitHub 检查更新...")
-    try:
-        r = requests.get("https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh", timeout=10)
-        if r.status_code == 200:
-            send_tg(token, chat_id, "📥 脚本已就绪，正在执行热更新并重启守护进程...")
-            os.system("curl -sL https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh | bash -s -- --update-bot &")
-    except Exception as e:
-        send_tg(token, chat_id, f"❌ OTA 失败: {str(e)}")
+def handle_local_update(token, chat_id):
+    send_tg(token, chat_id, "📥 正在给自己执行热更新...")
+    os.system("curl -sL https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh | bash -s -- --update-bot &")
 
 def main():
     env = load_env()
@@ -525,6 +524,7 @@ def main():
                     if cb:
                         data = cb.get("data")
                         cb_msg = cb.get("message", {})
+                        msg_id = cb_msg.get("message_id")
                         if str(cb_msg.get("chat", {}).get("id")) != chat_id: continue
                         
                         if data == "status_cluster":
@@ -533,15 +533,47 @@ def main():
                             res = "📊 <b>集群节点看板 (Pro)</b>\n"
                             for nid, s in all_s.items():
                                 res += f"🆔 <code>{nid}</code>\n"
-                                res += f" ├ Xray: {s['xray']} | Ver: {s.get('v','v1.0')}\n"
                                 res += f" ├ CPU: {gen_bar(s.get('cpu', 0))}\n"
-                                res += f" └ Mem: {gen_bar(s.get('mem_pct', 0))} ({s.get('mem_used', 'N/A')})\n\n"
-                            send_tg(token, chat_id, res, edit_id=cb_msg.get("message_id"))
+                                res += f" └ Mem: {gen_bar(s.get('mem_pct', 0))} (v{s.get('v','?')})\n\n"
+                            send_tg(token, chat_id, res, edit_id=msg_id)
                         elif data.startswith("log_"):
                             log_type = data.split("_")[1]
                             send_action(token, chat_id)
                             logs = run_cmd(f"journalctl -u {log_type} -n 20 --no-pager")[-3500:]
                             send_tg(token, chat_id, f"📄 <b>{log_type.upper()} 最近日志:</b>\n<pre>{html.escape(logs)}</pre>")
+                        elif data.startswith("chk_") or data == "update_refresh":
+                            # 多选勾选逻辑
+                            if data.startswith("chk_"):
+                                target_node = data.split("_")[1]
+                                if msg_id not in update_registry: update_registry[msg_id] = set()
+                                if target_node in update_registry[msg_id]: update_registry[msg_id].remove(target_node)
+                                else: update_registry[msg_id].add(target_node)
+                            
+                            all_s = requests.get(f"{cf_url}/all_status", headers={"X-Cluster-Token": c_token}).json()
+                            selected = update_registry.get(msg_id, set())
+                            
+                            btns = []
+                            for nid, s in all_s.items():
+                                mark = "✅" if nid in selected else "☐"
+                                btns.append([{"text": f"{mark} {nid} (v{s.get('v','?')})", "callback_data": f"chk_{nid}"}])
+                            
+                            btns.append([{"text": "🚀 开始升级已选项", "callback_data": "do_bulk_update"}])
+                            btns.append([{"text": "🔄 刷新列表", "callback_data": "update_refresh"}])
+                            
+                            send_tg(token, chat_id, "🗳️ <b>请勾选需要升级的节点:</b>\n勾选后点击下方按钮开始分发指令。", reply_markup={"inline_keyboard": btns}, edit_id=msg_id)
+                        elif data == "do_bulk_update":
+                            selected = update_registry.get(msg_id, set())
+                            if not selected:
+                                requests.post(f"https://api.telegram.org/bot{token}/answerCallbackQuery", json={"callback_query_id": cb["id"], "text": "❌ 请至少选择一个节点", "show_alert": True})
+                                continue
+                            
+                            send_tg(token, chat_id, f"⚙️ 正在向 {len(selected)} 个节点发送热更新指令...", edit_id=msg_id)
+                            for nid in selected:
+                                if nid == NODE_ID:
+                                    handle_local_update(token, chat_id)
+                                else:
+                                    requests.post(f"{cf_url}/command", json={"target_id": nid, "cmd": "--update-bot", "task_id": int(time.time()*1000)}, headers={"X-Cluster-Token": c_token})
+                            update_registry.pop(msg_id, None)
                         continue
 
                     text = msg.get("text", "")
@@ -555,9 +587,8 @@ def main():
                         else:
                             s = get_status_data()
                             res = f"📍 <b>节点详情:</b> <code>{NODE_ID}</code>\n"
-                            res += f" ├ Xray: {s['xray']} | Ver: {s['v']}\n"
                             res += f" ├ CPU: {gen_bar(s['cpu'])}\n"
-                            res += f" └ Mem: {gen_bar(s['mem_pct'])} ({s['mem_used']})"
+                            res += f" └ Mem: {gen_bar(s['mem_pct'])} (v{s['v']})"
                             send_tg(token, chat_id, res)
                     elif text == "/logs":
                         btns = {"inline_keyboard": [
@@ -567,7 +598,16 @@ def main():
                         ]}
                         send_tg(token, chat_id, "📂 <b>日志查询中心 (Pro)</b>\n请选择日志类型：", reply_markup=btns)
                     elif text == "/update":
-                        handle_ota(token, chat_id)
+                        if is_cluster:
+                            # 触发多选 UI
+                            all_s = requests.get(f"{cf_url}/all_status", headers={"X-Cluster-Token": c_token}).json()
+                            btns = []
+                            for nid, s in all_s.items():
+                                btns.append([{"text": f"☐ {nid} (v{s.get('v','?')})", "callback_data": f"chk_{nid}"}])
+                            btns.append([{"text": "🚀 开始升级已选项", "callback_data": "do_bulk_update"}])
+                            send_tg(token, chat_id, "🗳️ <b>请勾选需要升级的节点:</b>\n勾选后点击下方按钮开始分发指令。", reply_markup={"inline_keyboard": btns})
+                        else:
+                            handle_local_update(token, chat_id)
         except Exception as e: 
             print(f"Error: {e}")
             time.sleep(5)
