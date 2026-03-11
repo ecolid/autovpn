@@ -56,5 +56,9 @@ wget -N https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh && chmo
 
 如果你有任何建议或发现了 Bug，欢迎通过 GitHub 提交 [Issue](https://github.com/ecolid/autovpn/issues) 或直接发起 Pull Request。
 
+## ⚖️ 开源协议
+
+本项目采用 [MIT License](LICENSE) 协议开源。你可以自由地使用、修改和分发。
+
 ---
 *Powered by AutoVPN Team*
