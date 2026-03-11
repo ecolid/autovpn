@@ -367,6 +367,21 @@ EOF
     CLUSTER_MODE="on"
     save_env
     
+    # [v1.2.0] 配置云端 Master: 绑定 Token 和 Webhook
+    log_info "正在配置云端 Master (Webhook & Tokens)..."
+    local kv_id=$(cat /usr/local/etc/autovpn/.kv_id 2>/dev/null)
+    if [ ! -z "$kv_id" ]; then
+        curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/storage/kv/namespaces/${kv_id}/values/BOT_TOKEN" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" --data "$TG_BOT_TOKEN" > /dev/null
+        curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/storage/kv/namespaces/${kv_id}/values/CHAT_ID" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" --data "$TG_CHAT_ID" > /dev/null
+        
+        # 激活 Webhook
+        curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/setWebhook" \
+            -d "url=${CF_WORKER_URL}/webhook" > /dev/null
+        log_info "✅ 云端 Webhook 已激活！"
+    fi
+
     log_info "✅ Worker 部署成功！"
     echo -e "Worker URL: ${MAGENTA}${CF_WORKER_URL}${NC}"
     echo -e "Cluster Token: ${MAGENTA}${CLUSTER_TOKEN}${NC}"
@@ -425,16 +440,13 @@ setup_guardian_bot() {
         fi
     fi
 
-    # 创建驱动脚本 (Pro v1.1.5 - 汲取 OpenClaw 经验 + 多选升级 UI)
+    # 创建驱动脚本 (v1.2.0 - Serverless Passive Agent)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
-import requests, time, subprocess, os, json, sys, socket, re, html
+import requests, time, subprocess, os, json, sys, socket, html
 
-VERSION = "v1.1.5"
+VERSION = "v1.2.0"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
-
-# 升级状态注册表 (msg_id -> set of selected_node_ids)
-update_registry = {}
 
 def load_env():
     env = {}
@@ -454,11 +466,7 @@ def gen_bar(pct, length=10):
     filled = int(round(p / 100 * length))
     if filled > length: filled = length
     elif filled < 0: filled = 0
-    bar = "█" * filled + "░" * (length - filled)
-    if p < 60: icon = "🟢"
-    elif p < 85: icon = "🟡"
-    else: icon = "🔴"
-    return f"{icon} [{bar}] {p: >4.1f}%"
+    return "█" * filled + "░" * (length - filled)
 
 def run_cmd(cmd):
     try: return subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.STDOUT)
@@ -468,150 +476,47 @@ def get_status_data():
     xray = "✅" if "active" in run_cmd("systemctl is-active xray") else "❌"
     cpu = run_cmd("top -bn1 | grep 'Cpu(s)' | awk '{print $2}'").strip() or "0"
     mem_pct = run_cmd("free | grep Mem | awk '{print $3/$2 * 100.0}'").strip() or "0"
-    mem_used = run_cmd("free -m | awk '/Mem:/{printf \"%dMi\", $3}'").strip()
-    return {"id": NODE_ID, "xray": xray, "cpu": cpu, "mem_pct": mem_pct, "mem_used": mem_used, "v": VERSION, "t": int(time.time())}
+    return {"id": NODE_ID, "xray": xray, "cpu": cpu, "mem_pct": mem_pct, "v": VERSION, "t": int(time.time())}
 
-def send_tg(token, chat_id, text, reply_markup=None, edit_id=None):
-    url = f"https://api.telegram.org/bot{token}/"
-    method = "sendMessage" if not edit_id else "editMessageText"
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
-    if edit_id: payload["message_id"] = edit_id
-    if reply_markup: payload["reply_markup"] = json.dumps(reply_markup)
-    try: return requests.post(url + method, json=payload, timeout=10).json()
-    except: return {}
-
-def send_action(token, chat_id, action="typing"):
-    try: requests.post(f"https://api.telegram.org/bot{token}/sendChatAction", json={"chat_id": chat_id, "action": action}, timeout=5)
-    except: pass
-
-def cluster_sync(cf_url, c_token):
+def post_report(cf_url, c_token):
     headers = {"X-Cluster-Token": c_token}
-    try:
-        requests.post(f"{cf_url}/report", json=get_status_data(), headers=headers, timeout=5)
-        r = requests.get(f"{cf_url}/report", headers=headers, timeout=5)
-        if r.status_code == 200:
-            task = r.json()
-            if task.get("cmd"):
-                res = run_cmd(f"bash /usr/local/bin/autovpn {task['cmd']}")
-                requests.post(f"{cf_url}/result", json={"task_id": task['task_id'], "result": res}, headers=headers)
+    try: requests.post(f"{cf_url}/report", json=get_status_data(), headers=headers, timeout=5)
     except: pass
-
-def handle_local_update(token, chat_id):
-    send_tg(token, chat_id, "📥 正在给自己执行热更新...")
-    os.system("curl -sL https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh | bash -s -- --update-bot &")
 
 def main():
     env = load_env()
-    token, chat_id = env.get("TG_BOT_TOKEN"), env.get("TG_CHAT_ID")
-    cf_url, c_token = env.get("CF_WORKER_URL", "").rstrip("/"), env.get("CLUSTER_TOKEN")
-    is_cluster = env.get("CLUSTER_MODE") == "on"
+    cf_url = env.get("CF_WORKER_URL", "").rstrip("/")
+    c_token = env.get("CLUSTER_TOKEN")
     
-    last_update_id = 0
+    if not cf_url or not c_token:
+        print("Cluster config missing. Passive mode exiting.")
+        sys.exit(1)
+
+    headers = {"X-Cluster-Token": c_token}
+    print(f"AutoVPN Guardian {VERSION} started in Passive Mode.")
+    
     while True:
         try:
-            if is_cluster: cluster_sync(cf_url, c_token)
-            if not token or not chat_id:
-                time.sleep(10); continue
-
-            r = requests.get(f"https://api.telegram.org/bot{token}/getUpdates", 
-                             params={"offset": last_update_id + 1, "timeout": 20}, timeout=25)
+            # 轮询指令 (仅读取，不消耗写入额度)
+            r = requests.get(f"{cf_url}/report?id={NODE_ID}", headers=headers, timeout=10)
             if r.status_code == 200:
-                for update in r.json().get("result", []):
-                    last_update_id = update["update_id"]
-                    msg = update.get("message", {})
-                    cb = update.get("callback_query", {})
-                    
-                    if cb:
-                        data = cb.get("data")
-                        cb_msg = cb.get("message", {})
-                        msg_id = cb_msg.get("message_id")
-                        if str(cb_msg.get("chat", {}).get("id")) != chat_id: continue
-                        
-                        if data == "status_cluster":
-                            send_action(token, chat_id)
-                            all_s = requests.get(f"{cf_url}/all_status", headers={"X-Cluster-Token": c_token}).json()
-                            res = "📊 <b>集群节点看板 (Pro)</b>\n"
-                            for nid, s in all_s.items():
-                                res += f"🆔 <code>{nid}</code>\n"
-                                res += f" ├ CPU: {gen_bar(s.get('cpu', 0))}\n"
-                                res += f" └ Mem: {gen_bar(s.get('mem_pct', 0))} (v{s.get('v','?')})\n\n"
-                            send_tg(token, chat_id, res, edit_id=msg_id)
-                        elif data.startswith("log_"):
-                            log_type = data.split("_")[1]
-                            send_action(token, chat_id)
-                            logs = run_cmd(f"journalctl -u {log_type} -n 20 --no-pager")[-3500:]
-                            send_tg(token, chat_id, f"📄 <b>{log_type.upper()} 最近日志:</b>\n<pre>{html.escape(logs)}</pre>")
-                        elif data.startswith("chk_") or data == "update_refresh":
-                            # 多选勾选逻辑
-                            if data.startswith("chk_"):
-                                target_node = data.split("_")[1]
-                                if msg_id not in update_registry: update_registry[msg_id] = set()
-                                if target_node in update_registry[msg_id]: update_registry[msg_id].remove(target_node)
-                                else: update_registry[msg_id].add(target_node)
-                            
-                            all_s = requests.get(f"{cf_url}/all_status", headers={"X-Cluster-Token": c_token}).json()
-                            selected = update_registry.get(msg_id, set())
-                            
-                            btns = []
-                            for nid, s in all_s.items():
-                                mark = "✅" if nid in selected else "☐"
-                                btns.append([{"text": f"{mark} {nid} (v{s.get('v','?')})", "callback_data": f"chk_{nid}"}])
-                            
-                            btns.append([{"text": "🚀 开始升级已选项", "callback_data": "do_bulk_update"}])
-                            btns.append([{"text": "🔄 刷新列表", "callback_data": "update_refresh"}])
-                            
-                            send_tg(token, chat_id, "🗳️ <b>请勾选需要升级的节点:</b>\n勾选后点击下方按钮开始分发指令。", reply_markup={"inline_keyboard": btns}, edit_id=msg_id)
-                        elif data == "do_bulk_update":
-                            selected = update_registry.get(msg_id, set())
-                            if not selected:
-                                requests.post(f"https://api.telegram.org/bot{token}/answerCallbackQuery", json={"callback_query_id": cb["id"], "text": "❌ 请至少选择一个节点", "show_alert": True})
-                                continue
-                            
-                            send_tg(token, chat_id, f"⚙️ 正在向 {len(selected)} 个节点发送热更新指令...", edit_id=msg_id)
-                            for nid in selected:
-                                if nid == NODE_ID:
-                                    handle_local_update(token, chat_id)
-                                else:
-                                    requests.post(f"{cf_url}/command", json={"target_id": nid, "cmd": "--update-bot", "task_id": int(time.time()*1000)}, headers={"X-Cluster-Token": c_token})
-                            update_registry.pop(msg_id, None)
-                        continue
-
-                    text = msg.get("text", "")
-                    if str(msg.get("chat", {}).get("id")) != chat_id: continue
-
-                    if text == "/status":
-                        send_action(token, chat_id)
-                        if is_cluster:
-                            buttons = {"inline_keyboard": [[{"text": "🌐 查看全集群状态", "callback_data": "status_cluster"}]]}
-                            send_tg(token, chat_id, f"📍 <b>当前节点:</b> <code>{NODE_ID}</code>\n请选择查询范围：", reply_markup=buttons)
-                        else:
-                            s = get_status_data()
-                            res = f"📍 <b>节点详情:</b> <code>{NODE_ID}</code>\n"
-                            res += f" ├ CPU: {gen_bar(s['cpu'])}\n"
-                            res += f" └ Mem: {gen_bar(s['mem_pct'])} (v{s['v']})"
-                            send_tg(token, chat_id, res)
-                    elif text == "/logs":
-                        btns = {"inline_keyboard": [
-                            [{"text": "🧵 Xray 业务日志", "callback_data": "log_xray"}],
-                            [{"text": "💠 Nginx 访问日志", "callback_data": "log_nginx"}],
-                            [{"text": "🤖 守护进程日志", "callback_data": "log_autovpn-guardian"}]
-                        ]}
-                        send_tg(token, chat_id, "📂 <b>日志查询中心 (Pro)</b>\n请选择日志类型：", reply_markup=btns)
-                    elif text == "/update":
-                        if is_cluster:
-                            # 触发多选 UI
-                            all_s = requests.get(f"{cf_url}/all_status", headers={"X-Cluster-Token": c_token}).json()
-                            btns = []
-                            for nid, s in all_s.items():
-                                btns.append([{"text": f"☐ {nid} (v{s.get('v','?')})", "callback_data": f"chk_{nid}"}])
-                            btns.append([{"text": "🚀 开始升级已选项", "callback_data": "do_bulk_update"}])
-                            send_tg(token, chat_id, "🗳️ <b>请勾选需要升级的节点:</b>\n勾选后点击下方按钮开始分发指令。", reply_markup={"inline_keyboard": btns})
-                        else:
-                            handle_local_update(token, chat_id)
-        except Exception as e: 
+                task = r.json()
+                cmd = task.get("cmd")
+                
+                if cmd == "STATUS_REQ":
+                    post_report(cf_url, c_token)
+                elif cmd == "--update-bot":
+                    os.system("curl -sL https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh | bash -s -- --update-bot &")
+                elif cmd and cmd.startswith("logs"):
+                    log_type = cmd.split(" ")[1]
+                    logs = run_cmd(f"journalctl -u {log_type} -n 20 --no-pager")[-3000:]
+                    # Post results could be implemented later if needed for full log relay
+                elif cmd:
+                    run_cmd(f"bash /usr/local/bin/autovpn {cmd}")
+        except Exception as e:
             print(f"Error: {e}")
-            time.sleep(5)
-        time.sleep(1)
+            time.sleep(10)
+        time.sleep(5)
 
 if __name__ == "__main__":
     main()
