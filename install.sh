@@ -358,33 +358,58 @@ EOF
         return 1
     fi
     
-    # 获取子域名以构建 URL
-    local subdomain_res=$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/subdomain" \
-        -H "Authorization: Bearer ${CF_API_TOKEN}")
-    local subdomain=$(echo "$subdomain_res" | jq -r '.result.subdomain')
-    
-    CF_WORKER_URL="https://autovpn-relay.${subdomain}.workers.dev"
-    CLUSTER_MODE="on"
-    save_env
-    
-    # [v1.2.0] 配置云端 Master: 绑定 Token 和 Webhook
-    log_info "正在配置云端 Master (Webhook & Tokens)..."
-    local kv_id=$(cat /usr/local/etc/autovpn/.kv_id 2>/dev/null)
-    if [ ! -z "$kv_id" ]; then
-        curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/storage/kv/namespaces/${kv_id}/values/BOT_TOKEN" \
-            -H "Authorization: Bearer ${CF_API_TOKEN}" --data "$TG_BOT_TOKEN" > /dev/null
-        curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/storage/kv/namespaces/${kv_id}/values/CHAT_ID" \
-            -H "Authorization: Bearer ${CF_API_TOKEN}" --data "$TG_CHAT_ID" > /dev/null
-        
-        # 激活 Webhook
-        curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/setWebhook" \
-            -d "url=${CF_WORKER_URL}/webhook" > /dev/null
-        log_info "✅ 云端 Webhook 已激活！"
+    # [v1.3.0] 创建 D1 数据库
+    log_info "正在配置云端 D1 数据库 (v1.3.0)..."
+    local d1_res=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database" \
+        -H "Authorization: Bearer ${CF_API_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d '{"name": "autovpn_db"}')
+    local d1_id=$(echo "$d1_res" | jq -r '.result.uuid')
+    # 如果已存在会报错，尝试直接获取 ID
+    if [[ "$d1_id" == "null" ]]; then
+        d1_id=$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result[] | select(.name=="autovpn_db") | .uuid')
     fi
+    echo "$d1_id" > /usr/local/etc/autovpn/.d1_id
 
-    log_info "✅ Worker 部署成功！"
-    echo -e "Worker URL: ${MAGENTA}${CF_WORKER_URL}${NC}"
-    echo -e "Cluster Token: ${MAGENTA}${CLUSTER_TOKEN}${NC}"
+    # 初始化 Schema
+    log_info "正在初始化 SQL 表结构..."
+    local sql_init="
+        CREATE TABLE IF NOT EXISTS nodes (id TEXT PRIMARY KEY, cpu REAL, mem_pct REAL, v TEXT, t INTEGER, is_selected INTEGER DEFAULT 0, alert_sent INTEGER DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS commands (id INTEGER PRIMARY KEY AUTOINCREMENT, target_id TEXT, cmd TEXT, task_id INTEGER, status TEXT DEFAULT 'pending');
+        CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, val TEXT);
+        INSERT OR REPLACE INTO config (key, val) VALUES ('BOT_TOKEN', '$TG_BOT_TOKEN');
+        INSERT OR REPLACE INTO config (key, val) VALUES ('CHAT_ID', '$TG_CHAT_ID');
+    "
+    curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
+        -H "Authorization: Bearer ${CF_API_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "{\"sql\": \"$sql_init\"}" > /dev/null
+
+    # 部署 Worker (带 D1 绑定)
+    log_info "正在上传并绑定 Worker 脚本..."
+    local worker_js=$(cat /usr/local/etc/autovpn/cf_worker_relay.js | sed "s/your_private_token_here/${CLUSTER_TOKEN}/g")
+    
+    # 构造带绑定的 Multipart 上传
+    cat > /tmp/metadata.json <<EOF
+{
+  "main_module": "index.js",
+  "bindings": [
+    { "type": "d1", "name": "DB", "id": "$d1_id" }
+  ]
+}
+EOF
+    curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/autovpn-relay" \
+        -H "Authorization: Bearer ${CF_API_TOKEN}" \
+        -F "metadata=@/tmp/metadata.json;type=application/json" \
+        -F "index.js=$worker_js;type=application/javascript+module" > /dev/null
+
+    # 配置 Webhook
+    curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/setWebhook" \
+        -d "url=https://autovpn-relay.$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/subdomain" -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result.subdomain').workers.dev/webhook" > /dev/null
+
+    log_info "✅ D1 全量集群主控已激活！"
+    echo -e "Cluster Mode: ${CYAN}D1 SQL (v1.3.0)${NC}"
     return 0
 }
 
@@ -440,11 +465,11 @@ setup_guardian_bot() {
         fi
     fi
 
-    # 创建驱动脚本 (v1.2.0 - Serverless Passive Agent)
+    # 创建驱动脚本 (v1.3.0 - D1 SQL Passive Agent)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, sys, socket, html
 
-VERSION = "v1.2.0"
+VERSION = "v1.3.0"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
 
@@ -460,63 +485,38 @@ def load_env():
                     env[k] = v.strip()
     return env
 
-def gen_bar(pct, length=10):
-    try: p = float(pct)
-    except: p = 0.0
-    filled = int(round(p / 100 * length))
-    if filled > length: filled = length
-    elif filled < 0: filled = 0
-    return "█" * filled + "░" * (length - filled)
-
 def run_cmd(cmd):
     try: return subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.STDOUT)
     except Exception as e: return str(e)
 
 def get_status_data():
-    xray = "✅" if "active" in run_cmd("systemctl is-active xray") else "❌"
     cpu = run_cmd("top -bn1 | grep 'Cpu(s)' | awk '{print $2}'").strip() or "0"
     mem_pct = run_cmd("free | grep Mem | awk '{print $3/$2 * 100.0}'").strip() or "0"
-    return {"id": NODE_ID, "xray": xray, "cpu": cpu, "mem_pct": mem_pct, "v": VERSION, "t": int(time.time())}
-
-def post_report(cf_url, c_token):
-    headers = {"X-Cluster-Token": c_token}
-    try: requests.post(f"{cf_url}/report", json=get_status_data(), headers=headers, timeout=5)
-    except: pass
+    return {"id": NODE_ID, "cpu": cpu, "mem_pct": mem_pct, "v": VERSION}
 
 def main():
     env = load_env()
     cf_url = env.get("CF_WORKER_URL", "").rstrip("/")
     c_token = env.get("CLUSTER_TOKEN")
     
-    if not cf_url or not c_token:
-        print("Cluster config missing. Passive mode exiting.")
-        sys.exit(1)
+    if not cf_url or not c_token: sys.exit(1)
 
     headers = {"X-Cluster-Token": c_token}
-    print(f"AutoVPN Guardian {VERSION} started in Passive Mode.")
+    print(f"AutoVPN Guardian {VERSION} (D1 Edition) started.")
     
     while True:
         try:
-            # 轮询指令 (仅读取，不消耗写入额度)
-            r = requests.get(f"{cf_url}/report?id={NODE_ID}", headers=headers, timeout=10)
+            # 高频心跳 (针对 D1 每日 10w 次额度优化)
+            r = requests.post(f"{cf_url}/report", json=get_status_data(), headers=headers, timeout=10)
             if r.status_code == 200:
                 task = r.json()
                 cmd = task.get("cmd")
-                
-                if cmd == "STATUS_REQ":
-                    post_report(cf_url, c_token)
-                elif cmd == "--update-bot":
+                if cmd == "--update-bot":
                     os.system("curl -sL https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh | bash -s -- --update-bot &")
-                elif cmd and cmd.startswith("logs"):
-                    log_type = cmd.split(" ")[1]
-                    logs = run_cmd(f"journalctl -u {log_type} -n 20 --no-pager")[-3000:]
-                    # Post results could be implemented later if needed for full log relay
                 elif cmd:
                     run_cmd(f"bash /usr/local/bin/autovpn {cmd}")
-        except Exception as e:
-            print(f"Error: {e}")
-            time.sleep(10)
-        time.sleep(5)
+        except: pass
+        time.sleep(30) # 30秒一次心跳，支持 Watchdog 报警
 
 if __name__ == "__main__":
     main()
