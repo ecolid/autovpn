@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.8 - Bootup Awareness)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.9 - Voice Restoration)
 # =================================================================
 
-VERSION="v1.9.8"
+VERSION="v1.9.9"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -459,7 +459,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.9.8)..."
+    log_info "正在配置云端 D1 数据库 (v1.9.9)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -491,6 +491,7 @@ deploy_cf_worker() {
  */
 
 const CLUSTER_TOKEN = "your_private_token_here";
+const VERSION = "your_version_here";
 
 export default {
     async fetch(request, env) {
@@ -867,7 +868,7 @@ async function sendTelegram(t, c, text, rm, eid) {
 EOF_JS
     # 准备 Worker 上传 (v1.8.9.4: 标准化模块路径)
     local worker_js_tmp="/tmp/index.js"
-    cat /tmp/worker.js | sed "s/your_private_token_here/${CLUSTER_TOKEN}/g" > "$worker_js_tmp"
+    cat /tmp/worker.js | sed "s/your_private_token_here/${CLUSTER_TOKEN}/g" | sed "s/your_version_here/${VERSION}/g" > "$worker_js_tmp"
     
     cat > /tmp/metadata.json <<EOF
 {
@@ -1172,11 +1173,11 @@ setup_guardian_bot() {
         fi
     fi
 
-    # 创建驱动脚本 (v1.9.8 - Bootup Awareness)
+    # 创建驱动脚本 (v1.9.9 - Voice Restoration)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, statistics, sys, socket
 
-VERSION = "1.9.8"
+VERSION = "1.9.9"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
 
