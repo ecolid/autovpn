@@ -770,15 +770,24 @@ EOF
     # 配置 Webhook
     log_info "正在激活 Webhook 路由监控..."
     local subdomain=$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/subdomain" -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result.subdomain')
+    CF_WORKER_URL="https://autovpn-relay.${subdomain}.workers.dev"
     curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/setWebhook" \
-        -d "url=https://autovpn-relay.${subdomain}.workers.dev/webhook" > /dev/null
+        -d "url=${CF_WORKER_URL}/webhook" > /dev/null
 
     # 获取 Bot 用户名并展示链接
     local bot_username=$(curl -s "https://api.telegram.org/bot${TG_BOT_TOKEN}/getMe" | jq -r '.result.username')
     
+    # 切换本地为集群模式并保存
+    CLUSTER_MODE="on"
+    [ -z "$CLUSTER_TOKEN" ] && CLUSTER_TOKEN=$(openssl rand -hex 16)
+    save_env
+    systemctl restart autovpn-guardian &>/dev/null || true
+
     log_info "✅ D1 状态机监控中心已激活！"
     echo -e "Cluster Mode: ${CYAN}D1 StatusMachine (v1.8.3)${NC}"
     echo -e "Telegram Bot: ${GREEN}https://t.me/${bot_username}${NC}"
+    echo -e "\n${YELLOW}💡 提示：${PLAIN}节点已开始向云端汇报。请立即点击上方链接进入机器人，"
+    echo -e "发送 ${CYAN}/start${PLAIN} 即可看到这台节点出现在【状态看板】中。"
     return 0
 }
 
