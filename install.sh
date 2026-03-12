@@ -135,14 +135,14 @@ load_config() {
         # 优先读取 Xray 配置文件中的实时数据
         if grep -q "reality" "$CONFIG_PATH"; then
             EXISTING_MODE="Reality"
-            EXISTING_UUID=$(jq -r '.inbounds[0].settings.clients[0].id' "$CONFIG_PATH" 2>/dev/null)
-            EXISTING_PORT=$(jq -r '.inbounds[0].port' "$CONFIG_PATH" 2>/dev/null)
-            EXISTING_SNI=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' "$CONFIG_PATH" 2>/dev/null)
+            EXISTING_UUID=$(jq -r '.inbounds[0].settings.clients[0].id' "$CONFIG_PATH" 2>/dev/null || grep -oP '"id":\s*"[a-f0-9-]{36}"' "$CONFIG_PATH" | head -n1 | grep -oP '[a-f0-9-]{36}' || echo "")
+            EXISTING_PORT=$(jq -r '.inbounds[0].port' "$CONFIG_PATH" 2>/dev/null || grep -oP '"port":\s*\d+' "$CONFIG_PATH" | head -n1 | grep -oP '\d+' || echo "")
+            EXISTING_SNI=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' "$CONFIG_PATH" 2>/dev/null || grep -oP '"serverNames":\s*\[\s*"[^"]+"' "$CONFIG_PATH" | head -n1 | grep -oP '"[^"]+"$' | tr -d '"' || echo "")
         elif grep -q "\"ws\"" "$CONFIG_PATH"; then
             EXISTING_MODE="WS-TLS"
-            EXISTING_UUID=$(jq -r '.inbounds[0].settings.clients[0].id' "$CONFIG_PATH" 2>/dev/null)
-            EXISTING_PATH=$(jq -r '.inbounds[0].streamSettings.wsSettings.path' "$CONFIG_PATH" 2>/dev/null)
-            EXISTING_DOMAIN=$(ls /etc/nginx/sites-available/ | grep ".conf" | head -n 1 | sed 's/.conf//')
+            EXISTING_UUID=$(jq -r '.inbounds[0].settings.clients[0].id' "$CONFIG_PATH" 2>/dev/null || grep -oP '"id":\s*"[a-f0-9-]{36}"' "$CONFIG_PATH" | head -n1 | grep -oP '[a-f0-9-]{36}' || echo "")
+            EXISTING_PATH=$(jq -r '.inbounds[0].streamSettings.wsSettings.path' "$CONFIG_PATH" 2>/dev/null || grep -oP '"path":\s*"[^"]+"' "$CONFIG_PATH" | head -n1 | grep -oP '"[^"]+"$' | tr -d '"' || echo "")
+            EXISTING_DOMAIN=$(ls /etc/nginx/sites-available/ 2>/dev/null | grep ".conf" | head -n 1 | sed 's/.conf//' || echo "")
         fi
     fi
     
