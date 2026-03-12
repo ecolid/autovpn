@@ -390,7 +390,7 @@ EOF
         -d "url=https://autovpn-relay.$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/subdomain" -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result.subdomain').workers.dev/webhook" > /dev/null
 
     log_info "✅ D1 状态机监控中心已激活！"
-    echo -e "Cluster Mode: ${CYAN}D1 StatusMachine (v1.8.1)${NC}"
+    echo -e "Cluster Mode: ${CYAN}D1 StatusMachine (v1.8.2)${NC}"
     return 0
 }
 
@@ -411,16 +411,18 @@ setup_guardian_bot() {
     
     local d1_id=$(cat /usr/local/etc/autovpn/.d1_id 2>/dev/null)
     if [[ ! -z "$d1_id" ]]; then
-        # 尝试从 D1 获取现有密钥
+        # 尝试从 D1 获取所有密钥 (v1.8.2: 增加 SSH_OWNER_PUB)
         local key_res=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
             -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
-            -d "{\"sql\": \"SELECT key, val FROM config WHERE key IN ('SSH_PRV', 'SSH_PUB')\"}")
+            -d "{\"sql\": \"SELECT key, val FROM config WHERE key IN ('SSH_PRV', 'SSH_PUB', 'SSH_OWNER_PUB')\"}")
         
         local prv_key=$(echo "$key_res" | jq -r '.result[0].results[] | select(.key=="SSH_PRV") | .val')
         local pub_key=$(echo "$key_res" | jq -r '.result[0].results[] | select(.key=="SSH_PUB") | .val')
+        local owner_pub=$(echo "$key_res" | jq -r '.result[0].results[] | select(.key=="SSH_OWNER_PUB") | .val')
         
+        # 1. 如果集群没有机器人秘钥，生成一对
         if [[ "$prv_key" == "null" || -z "$prv_key" ]]; then
-            log_info "集群尚未初始化密钥，正在生成新密钥对..."
+            log_info "集群尚未初始化机器人密钥，正在重新生成..."
             ssh-keygen -t rsa -b 2048 -f /tmp/id_cluster -N "" -q
             prv_key=$(cat /tmp/id_cluster)
             pub_key=$(cat /tmp/id_cluster.pub)
@@ -431,16 +433,46 @@ setup_guardian_bot() {
                 -d "$payload" > /dev/null
             rm -f /tmp/id_cluster*
         fi
+
+        # 2. [v1.8.2] 自动识别并保存“老板密钥” (Owner DNA)
+        if [[ "$owner_pub" == "null" || -z "$owner_pub" ]]; then
+            # 扫描 authorized_keys 中不带 guardian 限制标记的公钥
+            local detected_owner=$(grep -v "guardian.py" /root/.ssh/authorized_keys 2>/dev/null | grep "ssh-rsa" | head -n 1)
+            if [[ ! -z "$detected_owner" ]]; then
+                log_info "发现老板公钥 DNA，正在备份至云端..."
+                owner_pub="$detected_owner"
+                local sql_owner="INSERT OR REPLACE INTO config (key, val) VALUES ('SSH_OWNER_PUB', '$owner_pub')"
+                local p_owner=$(jq -n --arg sql "$sql_owner" '{"sql": $sql}')
+                curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
+                    -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
+                    -d "$p_owner" > /dev/null
+            fi
+        fi
         
-        # 写入本地文件
+        # 3. 部署私钥 (用于医生节点外访)
         echo "$prv_key" > /usr/local/etc/autovpn/cluster_key
         chmod 600 /usr/local/etc/autovpn/cluster_key
         
-        # 配置受限的 SSH 登录 (Forced Command)
+        # 4. 配置 authorized_keys (双锁并进)
+        # a. 机器人自愈锁 (Forced Command)
         local rescue_cmd="command=\"/usr/bin/python3 /usr/local/etc/autovpn/guardian.py --rescue-worker\""
         if ! grep -q "$pub_key" /root/.ssh/authorized_keys 2>/dev/null; then
             echo "${rescue_cmd} ${pub_key}" >> /root/.ssh/authorized_keys
-            log_info "已配置 SSH 互信连接 (自愈专用)"
+            log_info "✅ 已部署：机器人自愈锁 (受限权限)"
+        fi
+        # b. 老板最高权限锁 (Full Root)
+        if [[ ! -z "$owner_pub" && "$owner_pub" != "null" ]]; then
+            if ! grep -q "$owner_pub" /root/.ssh/authorized_keys 2>/dev/null; then
+                echo "${owner_pub}" >> /root/.ssh/authorized_keys
+                log_info "✅ 已同步：老板最高权限锁 (Full Root)"
+            fi
+        fi
+
+        # 5. 向老板展示公钥以便其手动配置 VPS 后台
+        if [[ "$mode" != "silent" ]]; then
+            echo -e "\n${BLUE}--- SSH 资产清单 (v1.8.2) ---${NC}"
+            echo -e "机器人公钥: ${YELLOW}${pub_key}${NC}"
+            echo -e "💡 建议将上方【机器人公钥】上传到 VPS 服务商后台，实现全自动一键扩容。"
         fi
     fi
 
@@ -486,11 +518,11 @@ setup_guardian_bot() {
         fi
     fi
 
-    # 创建驱动脚本 (v1.8.1 - Data Compass + Sentinel)
+    # 创建驱动脚本 (v1.8.2 - Data Compass + Sentinel)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, sys, socket, statistics
 
-VERSION = "v1.8.1"
+VERSION = "v1.8.2"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
 
