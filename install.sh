@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.9.6)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.9.7)
 # =================================================================
 
-VERSION="v1.8.9.6"
+VERSION="v1.8.9.7"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -596,6 +596,7 @@ async function handleTelegramUpdate(update, env) {
         let res = "🖥️ <b>节点实时状态</b>\n";
         const btns = [];
         for (const s of nodes.results) {
+            if (s.id === 'INSTALL_VERIFY') continue;
             const st = s.state === 'online' ? "🟢" : "🔴";
             const sel = s.is_selected ? " [✅]" : "";
             if (s.is_selected) selectedCount++;
@@ -626,6 +627,7 @@ async function handleTelegramUpdate(update, env) {
         const nodes = await env.DB.prepare("SELECT * FROM nodes ORDER BY t DESC").all();
         let report = "📊 <b>数据罗盘监测 (v1.8.3)</b>\n\n";
         for (const s of nodes.results) {
+            if (s.id === 'INSTALL_VERIFY') continue;
             let t = { up: 0, down: 0 }, q = { china: { lat: 0, jit: 0, loss: 0 } };
             try { t = JSON.parse(s.traffic_total || "{}"); } catch (e) { }
             try { q = JSON.parse(s.quality || "{}"); } catch (e) { }
@@ -633,8 +635,8 @@ async function handleTelegramUpdate(update, env) {
             const downGB = (t.down / (1024 ** 3)).toFixed(2);
             const lossIcon = q.china?.loss > 5 ? "⚠️" : "✅";
             report += `🌩️ <b>${s.id}</b>\n`;
-            report += `├ 流量: 🔼 ${upGB}G | 🔽 ${downGB}G\n`;
-            report += `└ 线路: 📶 ${q.china?.lat || 0}ms | ⏳ ${q.china?.jit || 0}ms | ${lossIcon} ${q.china?.loss || 0}%\n\n`;
+            report += `├ <b>累计流量:</b> 🔼 ${upGB}GB | 🔽 ${downGB}GB\n`;
+            report += `└ <b>链路质量:</b> 📶 延迟:${q.china?.lat || 0}ms | ⏳ 抖动:${q.china?.jit || 0}ms | ${lossIcon} 丢包:${q.china?.loss || 0}%\n\n`;
         }
         const btns = [[{ text: "🔄 刷新", callback_data: "show_stats" }, { text: "🔙 返回", callback_data: "show_main" }]];
         await sendTelegram(BOT_TOKEN, CHAT_ID, report, { inline_keyboard: btns }, update.callback_query?.message.message_id);
@@ -762,7 +764,22 @@ async function handleTelegramUpdate(update, env) {
     if (cbData?.startsWith("mgr_")) {
         const nodeId = cbData.split("_")[1];
         const btns = [[{ text: "⚡ 服务控制", callback_data: `sub_svc_${nodeId}` }], [{ text: "🔍 诊断查询", callback_data: `sub_diag_${nodeId}` }], [{ text: "🔙 返回", callback_data: "show_status" }]];
-        await sendTelegram(BOT_TOKEN, CHAT_ID, `🎮 <b>管理:</b> <code>${nodeId}</code>`, { inline_keyboard: btns }, update.callback_query.message.message_id);
+        await sendTelegram(BOT_TOKEN, CHAT_ID, `🎮 <b>管理节点:</b> <code>${nodeId}</code>\n请选择操作:`, { inline_keyboard: btns }, update.callback_query.message.message_id);
+    }
+    if (cbData?.startsWith("sub_svc_")) {
+        const nodeId = cbData.split("_")[2];
+        const btns = [[{ text: "▶️ 启动", callback_data: `cmd_${nodeId}_start` }, { text: "⏸️ 停止", callback_data: `cmd_${nodeId}_stop` }], [{ text: "🔄 重启", callback_data: `cmd_${nodeId}_restart` }], [{ text: "🔙 返回", callback_data: `mgr_${nodeId}` }]];
+        await sendTelegram(BOT_TOKEN, CHAT_ID, `⚡ <b>服务控制:</b> <code>${nodeId}</code>`, { inline_keyboard: btns }, update.callback_query.message.message_id);
+    }
+    if (cbData?.startsWith("sub_diag_")) {
+        const nodeId = cbData.split("_")[2];
+        const btns = [[{ text: "📄 查看日志", callback_data: `cmd_${nodeId}_log` }, { text: "📡 网络测速", callback_data: `cmd_${nodeId}_speed` }], [{ text: "🔙 返回", callback_data: `mgr_${nodeId}` }]];
+        await sendTelegram(BOT_TOKEN, CHAT_ID, `🔍 <b>诊断查询:</b> <code>${nodeId}</code>`, { inline_keyboard: btns }, update.callback_query.message.message_id);
+    }
+    if (cbData?.startsWith("cmd_")) {
+        const [_, nodeId, action] = cbData.split("_");
+        await env.DB.prepare("INSERT INTO commands (target_id, cmd, task_id) VALUES (?, ?, ?)").bind(nodeId, action, Date.now()).run();
+        await sendTelegram(BOT_TOKEN, CHAT_ID, `✅ <b>指令已下派</b>\n节点: <code>${nodeId}</code>\n操作: <code>${action}</code>\n等待回显...`);
     }
 
     return new Response("OK");
@@ -898,9 +915,11 @@ verify_cluster_health() {
         -H "Content-Type: application/json" \
         -d "{\"id\": \"INSTALL_VERIFY\", \"cpu\": \"0\", \"mem_pct\": \"0\", \"v\": \"v1.8.9\", \"h\": {\"verify\": \"OK\"}}")
     
-    if echo "$report_test" | grep -q "true"; then
+    if (echo "$report_test" | grep -q "true") {
         echo -e "   - D1 状态机: ${GREEN}正常 (读写存取 OK)${NC}"
-    else
+        # 清理测试冗余
+        cf_api POST "/d1/database/${d1_id}/query" "{\"sql\": \"DELETE FROM nodes WHERE id = 'INSTALL_VERIFY'\"}" > /dev/null
+    } else {
         echo -e "   - D1 状态机: ${RED}异常 (汇报失败)${NC}"
         is_healthy=false
     fi
