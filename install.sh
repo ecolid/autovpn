@@ -788,9 +788,23 @@ EOF
         -F "metadata=@/tmp/metadata.json;type=application/json" \
         -F "index.js=$worker_js;type=application/javascript+module" > /dev/null
 
+    # 激活 workers.dev 路由 (v1.8.5.1)
+    log_info "正在发布 Worker 到 workers.dev 子域名..."
+    curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/autovpn-relay/subdomain" \
+        -H "Authorization: Bearer ${CF_API_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d '{"enabled": true}' > /dev/null
+
     # 配置 Webhook
     log_info "正在激活 Webhook 路由监控..."
     local subdomain=$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/subdomain" -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result.subdomain')
+    
+    if [[ "$subdomain" == "null" || -z "$subdomain" ]]; then
+        log_err "检测到你的 CF 账户尚未配置 workers.dev 子域名。"
+        log_warn "请在 Cloudflare 控制台 -> Workers & Pages -> Subdomain 处随便设置一个，然后重试。"
+        return 1
+    fi
+
     CF_WORKER_URL="https://autovpn-relay.${subdomain}.workers.dev"
     curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/setWebhook" \
         -d "url=${CF_WORKER_URL}/webhook" > /dev/null
@@ -809,6 +823,7 @@ EOF
 
 # 辅助：集群健康在线自检 (v1.8.4)
 verify_cluster_health() {
+    sleep 3
     echo -e "\n${BLUE}--- 集群连通性深度自检 (v1.8.4) ---${NC}"
     
     # 1. 检查 Worker 响应
