@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.0.2 - Critical Fix)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.0.3 - Migration Hotfix)
 # =================================================================
 
-VERSION="v1.9.0.2"
+VERSION="v1.9.0.3"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -396,6 +396,8 @@ CF_API_TOKEN="$CF_API_TOKEN"
 CF_TOKEN="$CF_TOKEN"
 DOMAIN="$DOMAIN"
 UUID="$UUID"
+XRAY_PORT="$XRAY_PORT"
+WS_PATH="$WS_PATH"
 TG_BOT_TOKEN="$TG_BOT_TOKEN"
 TG_CHAT_ID="$TG_CHAT_ID"
 CLUSTER_MODE="$CLUSTER_MODE"
@@ -452,7 +454,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.9.0.2)..."
+    log_info "正在配置云端 D1 数据库 (v1.9.0.3)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -1444,6 +1446,7 @@ EOF
 # =================================================================
 install_ws_tls() {
     local XRAY_LISTEN_PORT=10000
+    XRAY_PORT=443 # WS-TLS 模式下外部访问统一用 443
     log_info ">>> 配置 VLESS-WS-TLS (CDN/强伪装)..."
     echo -e "${YELLOW}提示: 此模式需要你已将域名托管到 Cloudflare。适合在极端网络坏境下使用。${PLAIN}"
     
@@ -1559,6 +1562,16 @@ install_ws_tls() {
     { "tag": "api", "protocol": "blackhole" }
   ]
 }
+EOF
+    # 配置 Systemd
+    cat > /etc/systemd/system/xray.service <<EOF
+[Unit]
+Description=Xray Service
+After=network.target
+[Service]
+ExecStart=/usr/local/bin/xray -config /usr/local/etc/xray/config.json
+Restart=on-failure
+User=root
 EOF
     systemctl daemon-reload && systemctl enable xray && systemctl restart xray
 
