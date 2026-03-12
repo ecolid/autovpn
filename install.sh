@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.6)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.7)
 # =================================================================
 
-VERSION="v1.8.6"
+VERSION="v1.8.7"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -464,7 +464,7 @@ deploy_cf_worker() {
     log_info "正在上传并绑定 Worker 脚本..."
     cat > /tmp/worker.js <<'EOF_JS'
 /**
- * Cloudflare Worker for AutoVPN Guardian Cluster
+ * Cloudflare Worker for AutoVPN Guardian Cluster (v1.8.7 - Guided Setup)
  * Orchestrates: Inter-node Rescue, Interactive Deployment Wizard, Bulk Updates.
  */
 
@@ -806,36 +806,53 @@ EOF
         -H "Content-Type: application/json" \
         -d '{"enabled": true}' > /dev/null
 
-    # 配置 Webhook
-    log_info "正在激活 Webhook 路由监控..."
-    local subdomain=$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/subdomain" -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result.subdomain')
-    
-    if [[ "$subdomain" == "null" || -z "$subdomain" ]]; then
-        log_err "检测到你的 CF 账户尚未配置 workers.dev 子域名。"
-        log_warn "请在 Cloudflare 控制台 -> Workers & Pages -> Subdomain 处随便设置一个，然后重试。"
-        return 1
-    fi
+    # 获取并校验 subdomain (v1.8.7 交互引导)
+    log_info "正在配置 Webhook 路由监控..."
+    local subdomain=""
+    while [[ -z "$subdomain" || "$subdomain" == "null" ]]; do
+        local subdomain_res=$(cf_api GET "/workers/subdomain") || return 1
+        subdomain=$(echo "$subdomain_res" | jq -r '.result.subdomain')
+        
+        if [[ "$subdomain" == "null" || -z "$subdomain" ]]; then
+            log_err "检测到你的 CF 账户尚未配置 workers.dev 子域名。"
+            echo -e "${YELLOW}引导引导：${NC}"
+            echo -e "  1. 登录 Cloudflare 控制台。"
+            echo -e "  2. 点击左侧 ${BLUE}Workers & Pages${NC} -> ${BLUE}Plans & Settings${NC}。"
+            echo -e "  3. 在 ${CYAN}Subdomain${NC} 栏目点击 ${CYAN}Change${NC} 或 ${CYAN}Setup${NC}，随便设置一个名字。"
+            echo -e "  4. 设置完成后，请回到此处按 ${GREEN}回车键${NC} 重新尝试。"
+            read -p "等待中 (按回车重试)..."
+        fi
+    done
 
     CF_WORKER_URL="https://autovpn-relay.${subdomain}.workers.dev"
-    curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/setWebhook" \
-        -d "url=${CF_WORKER_URL}/webhook" > /dev/null
+    curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/setWebhook" -d "url=${CF_WORKER_URL}/webhook" > /dev/null
 
-    # 切换本地为集群模式并保存
+    # 切换本地状态
     CLUSTER_MODE="on"
     [ -z "$CLUSTER_TOKEN" ] && CLUSTER_TOKEN=$(openssl rand -hex 16)
     save_env
     systemctl restart autovpn-guardian &>/dev/null || true
 
-    # [v1.8.4] 自动化自检
-    verify_cluster_health
+    # 执行严谨自检
+    if verify_cluster_health; then
+        echo -e "\n${GREEN}✅ 集群环境已全部就绪！${NC}"
+        local bot_username=$(curl -s "https://api.telegram.org/bot${TG_BOT_TOKEN}/getMe" | jq -r '.result.username')
+        if [[ "$bot_username" == "null" || -z "$bot_username" ]]; then bot_username="Jpfqbot"; fi
+        echo -e "机器人链接: ${CYAN}https://t.me/${bot_username}${NC}"
+        echo -e "💡 提示：如果刚才在 Telegram 发送 /start 无反应，请尝试删除并重新开始对话。"
+    else
+        echo -e "\n${RED}⚠️ 集群部署虽然已完成，但部分自检未通过。${NC}"
+        echo -e "建议根据上方 [ERROR] 提示进行排查，或在 Telegram 手动测试。"
+    fi
 
     return 0
 }
 
-# 辅助：集群健康在线自检 (v1.8.4)
+# 辅助：集群健康在线自检 (v1.8.7 - Integrity Check)
 verify_cluster_health() {
     sleep 3
-    echo -e "\n${BLUE}--- 集群连通性深度自检 (v1.8.4) ---${NC}"
+    echo -e "\n${BLUE}--- 集群连通性深度自检 (v1.8.7) ---${NC}"
+    local is_healthy=true
     
     # 1. 检查 Worker 响应
     log_info "正在探测 Worker 网关状态..."
@@ -844,13 +861,13 @@ verify_cluster_health() {
         echo -e "   - Worker 网关: ${GREEN}正常 (200 OK)${NC}"
     else
         echo -e "   - Worker 网关: ${RED}异常 ($worker_ping)${NC}"
+        is_healthy=false
     fi
 
     # 2. 检查 Telegram Webhook
     log_info "正在验证 Telegram Webhook 状态..."
     local webhook_info=$(curl -s "https://api.telegram.org/bot${TG_BOT_TOKEN}/getWebhookInfo")
     local webhook_url=$(echo "$webhook_info" | jq -r '.result.url')
-    local pending_count=$(echo "$webhook_info" | jq -r '.result.pending_update_count')
     
     if [[ "$webhook_url" == "${CF_WORKER_URL}/webhook" ]]; then
         echo -e "   - Webhook 路由: ${GREEN}正常 (已指向 Worker)${NC}"
@@ -858,26 +875,24 @@ verify_cluster_health() {
         echo -e "   - Webhook 路由: ${RED}异常 (指向: $webhook_url)${NC}"
         log_warn "正在尝试强制修复 Webhook..."
         curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/setWebhook" -d "url=${CF_WORKER_URL}/webhook" > /dev/null
+        is_healthy=false
     fi
 
-    # 3. 检查 D1 数据一致性 (通过请求 Worker 测试)
+    # 3. 检查 D1 数据一致性
     log_info "正在同步 D1 数据库心跳..."
-    # 触发一次报告，看是否报错
     local report_test=$(curl -s -X POST "${CF_WORKER_URL}/report" \
         -H "X-Cluster-Token: ${CLUSTER_TOKEN}" \
         -H "Content-Type: application/json" \
-        -d "{\"id\": \"INSTALL_VERIFY\", \"cpu\": \"0\", \"mem_pct\": \"0\", \"v\": \"v1.8.4\", \"h\": {\"verify\": \"OK\"}}")
+        -d "{\"id\": \"INSTALL_VERIFY\", \"cpu\": \"0\", \"mem_pct\": \"0\", \"v\": \"v1.8.7\", \"h\": {\"verify\": \"OK\"}}")
     
     if echo "$report_test" | grep -q "true"; then
         echo -e "   - D1 状态机: ${GREEN}正常 (读写存取 OK)${NC}"
     else
         echo -e "   - D1 状态机: ${RED}异常 (汇报失败)${NC}"
+        is_healthy=false
     fi
 
-    echo -e "\n${GREEN}✅ 集群环境已全部就绪！${PLAIN}"
-    local bot_username=$(curl -s "https://api.telegram.org/bot${TG_BOT_TOKEN}/getMe" | jq -r '.result.username')
-    echo -e "机器人链接: ${CYAN}https://t.me/${bot_username}${NC}"
-    echo -e "${YELLOW}💡 提示：${PLAIN}如果刚才在 Telegram 发送 /start 无反应，请检查机器人是否已被你【停止】或处于【私聊限制】中。"
+    [[ "$is_healthy" == "true" ]] && return 0 || return 1
 }
 
 # 辅助：集群密钥轮换 (v1.8.3 - Zero-Downtime Rotation)
@@ -1545,6 +1560,7 @@ manage_warp() {
         log_info "✅ 已发起重连"
     elif [ "$action" == "reset" ]; then
         log_info "正在重置 WARP 注册信息..."
+        warp-cli --accept-tos registration delete &>/dev/null || true
         warp-cli --accept-tos registration new
         log_info "✅ 注册信息已更新"
     fi
@@ -1613,9 +1629,15 @@ show_menu() {
         4) manage_services; read -p "按回车键返回菜单..." ;;
         5) show_logs; read -p "按回车键返回菜单..." ;;
         6) 
-            echo -e "1. 刷新 WARP IP\n2. 重置 WARP 注册"
+            echo -e "1. 刷新 WARP IP"
+            echo -e "2. 重置 WARP 注册"
+            echo -e "0. 返回主菜单"
             read -p "选项: " wc
-            [ "$wc" == "1" ] && manage_warp "refresh" || manage_warp "reset"
+            case $wc in
+                1) manage_warp "refresh" ;;
+                2) manage_warp "reset" ;;
+                *) ;;
+            esac
             read -p "按回车键返回菜单..."
             ;;
         7) open_ports 80; open_ports 443; [ ! -z "$EXISTING_PORT" ] && open_ports $EXISTING_PORT; log_info "防火墙策略已更新。"; read -p "按回车键返回菜单..." ;;
