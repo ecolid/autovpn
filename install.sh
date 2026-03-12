@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.7 - Fatal Path Fix)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.8 - Bootup Awareness)
 # =================================================================
 
-VERSION="v1.9.7"
+VERSION="v1.9.8"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -459,7 +459,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.9.7)..."
+    log_info "正在配置云端 D1 数据库 (v1.9.8)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -515,7 +515,13 @@ export default {
                 await env.DB.prepare("UPDATE nodes SET state = 'online', alert_sent = 0 WHERE id = ?").bind(data.id).run();
                 const BOT_TOKEN = await getConfig(env, "BOT_TOKEN");
                 const CHAT_ID = await getConfig(env, "CHAT_ID");
-                if (BOT_TOKEN && CHAT_ID) await sendTelegram(BOT_TOKEN, CHAT_ID, `✅ <b>节点重连通知</b>\n节点 <code>${data.id}</code> 已恢复连接。`);
+                if (BOT_TOKEN && CHAT_ID) await sendTelegram(BOT_TOKEN, CHAT_ID, `✅ <b>节点恢复通知</b>\n节点 <code>${data.id}</code> 已重新建立心跳联络。`);
+            }
+            
+            if (data.boot) {
+                const BOT_TOKEN = await getConfig(env, "BOT_TOKEN");
+                const CHAT_ID = await getConfig(env, "CHAT_ID");
+                if (BOT_TOKEN && CHAT_ID) await sendTelegram(BOT_TOKEN, CHAT_ID, `🚀 <b>节点上线/重载通知</b>\n节点 <code>${data.id}</code> (v${data.v}) 已在 VPS 成功启动巡检。`);
             }
 
             const healthStr = JSON.stringify(data.h || {});
@@ -912,6 +918,10 @@ EOF
 
     CF_WORKER_URL="https://autovpn-relay.${subdomain}.workers.dev"
     curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/setWebhook" -d "url=${CF_WORKER_URL}/webhook" > /dev/null
+    
+    # 发送就绪确认
+    curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+        -d "chat_id=${TG_CHAT_ID}&text=🏰 <b>AutoVPN 指挥部已就位 (v${VERSION})</b>%0A✅ Webhook: 已激活%0A✅ 云端 D1: 已绑定%0A%0A等待节点加入...&parse_mode=HTML" > /dev/null
 
     # 切换本地状态
     CLUSTER_MODE="on"
@@ -1162,11 +1172,11 @@ setup_guardian_bot() {
         fi
     fi
 
-    # 创建驱动脚本 (v1.9.7 - Fatal Path Fix)
+    # 创建驱动脚本 (v1.9.8 - Bootup Awareness)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, statistics, sys, socket
 
-VERSION = "1.9.7"
+VERSION = "1.9.8"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
 
@@ -1230,6 +1240,7 @@ def get_status_data(tid=None, res=None):
     return data
 
 def main():
+    booted = True
     while True:
         try:
             if not os.path.exists(ENV_PATH): time.sleep(10); continue
@@ -1238,7 +1249,12 @@ def main():
             cf_url, c_token = env.get("CF_WORKER_URL", "").rstrip("/"), env.get("CLUSTER_TOKEN")
             if not cf_url: time.sleep(10); continue
 
-            r = requests.post(f"{cf_url}/report", json=get_status_data(), headers={"X-Cluster-Token": c_token}, timeout=10)
+            data = get_status_data()
+            if booted: 
+                data["boot"] = True
+                booted = False
+            
+            r = requests.post(f"{cf_url}/report", json=data, headers={"X-Cluster-Token": c_token}, timeout=10)
             if r.status_code == 200:
                 task = r.json()
                 if task.get("cmd"):
