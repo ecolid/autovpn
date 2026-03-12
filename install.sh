@@ -264,24 +264,30 @@ send_tg_msg() {
 config_tg_bot() {
     echo -e "\n${BLUE}==================== Telegram 机器人配置 ====================${PLAIN}"
     echo -e "说明：开启后，脚本将在安装完成、故障预警或远程扩容时实时给你发通知。"
-    read -p "是否配置 Telegram 机器人通知？ [y/N]: " setup_tg
+    
+    local default_setup="y"
+    [[ -z "$TG_BOT_TOKEN" || -z "$TG_CHAT_ID" ]] && default_setup="n"
+    
+    read -p "是否配置/更新 Telegram 机器人通知？ [y/N] (默认 $default_setup): " setup_tg
+    setup_tg="${setup_tg:-$default_setup}"
+    
     if [[ "$setup_tg" =~ ^[Yy]$ ]]; then
         echo -e "\n${CYAN}1. 获取 Bot Token:${PLAIN}"
         echo -e "   - 在 Telegram 中搜索 ${YELLOW}@BotFather${PLAIN} 并发送 /newbot。"
-        echo -e "   - 按照提示创建机器人后，你会得到一串类似 '123456:ABC-DEF' 的字符。"
-        read -p "请输入 Bot Token: " INPUT_TOKEN
+        [ ! -z "$TG_BOT_TOKEN" ] && echo -e "   - 当前记录: ${CYAN}${TG_BOT_TOKEN:0:6}******${PLAIN}"
+        read -p "请输入 Bot Token (直接回车保持不变): " INPUT_TOKEN
         TG_BOT_TOKEN="${INPUT_TOKEN:-$TG_BOT_TOKEN}"
 
         echo -e "\n${CYAN}2. 获取 Chat ID:${PLAIN}"
         echo -e "   - 在 Telegram 中搜索 ${YELLOW}@userinfobot${PLAIN} 并发送 /start。"
-        echo -e "   - 该机器人会回复你的数字 ID (如: 987654321)。"
-        read -p "请输入 Chat ID: " INPUT_ID
+        [ ! -z "$TG_CHAT_ID" ] && echo -e "   - 当前记录: ${CYAN}$TG_CHAT_ID${PLAIN}"
+        read -p "请输入 Chat ID (直接回车保持不变): " INPUT_ID
         TG_CHAT_ID="${INPUT_ID:-$TG_CHAT_ID}"
         
         if [ ! -z "$TG_BOT_TOKEN" ] && [ ! -z "$TG_CHAT_ID" ]; then
             save_env
             log_info "正在发送测试消息..."
-            send_tg_msg "🚀 *AutoVPN 机器人连接成功！*\n\n这是一条测试消息，说明你的订阅通知已生效。"
+            send_tg_msg "🚀 *AutoVPN 机器人连接成功！*\n\n这是一条测试消息，说明你的配置已持久化保存。"
             log_info "✅ 配置成功！"
         else
             log_err "Token 或 Chat ID 不能为空，配置取消。"
@@ -292,16 +298,19 @@ config_tg_bot() {
 save_env() {
     mkdir -p /usr/local/etc/autovpn
     cat > "$ENV_PATH" <<EOF
+CF_ACCOUNT_ID="$CF_ACCOUNT_ID"
+CF_API_TOKEN="$CF_API_TOKEN"
 CF_TOKEN="$CF_TOKEN"
 DOMAIN="$DOMAIN"
 UUID="$UUID"
 TG_BOT_TOKEN="$TG_BOT_TOKEN"
 TG_CHAT_ID="$TG_CHAT_ID"
 CLUSTER_MODE="$CLUSTER_MODE"
-CF_WORKER_URL="$CF_WORKER_URL"
 CLUSTER_TOKEN="$CLUSTER_TOKEN"
-CF_ACCOUNT_ID="$CF_ACCOUNT_ID"
+CF_WORKER_URL="$CF_WORKER_URL"
 EOF
+    # 同步老板钥匙 (v1.8.2)
+    sync_owner_dna
 }
 
 # 辅助：一键部署 Cloudflare Worker
@@ -313,7 +322,6 @@ deploy_cf_worker() {
         echo -e "\n${YELLOW}【重要】检测到尚未配置 Telegram 机器人。${PLAIN}"
         echo -e "说明：集群模式必须依赖机器人进行消息中继和指令下发。"
         config_tg_bot
-        # 再次检查
         if [[ -z "$TG_BOT_TOKEN" || -z "$TG_CHAT_ID" ]]; then
             log_err "未配置机器人，无法启动集群模式。"
             return 1
@@ -324,19 +332,26 @@ deploy_cf_worker() {
         echo -e "\n${CYAN}获取 Account ID:${PLAIN}"
         echo -e "   - 登录 Cloudflare 官网 (dash.cloudflare.com)。"
         echo -e "   - 在首页右侧栏最下方可以看到 'Account ID'。"
-        read -p "请输入 Cloudflare Account ID: " CF_ACCOUNT_ID
+        [ ! -z "$CF_ACCOUNT_ID" ] && echo -e "   - 当前记录: ${CYAN}$CF_ACCOUNT_ID${PLAIN}"
+        read -p "请输入 Cloudflare Account ID: " INPUT_ACCOUNT_ID
+        CF_ACCOUNT_ID="${INPUT_ACCOUNT_ID:-$CF_ACCOUNT_ID}"
     fi
 
-    echo -e "\n${CYAN}获取 API Token:${PLAIN}"
-    echo -e "   - 电脑端访问: https://dash.cloudflare.com/profile/api-tokens"
-    echo -e "   - 点击 '创建令牌' -> 使用 '编辑 Cloudflare Workers' 模板。"
-    echo -e "   - 在 '账户资源' 选 '所有账户'，'区域资源' 选 '所有区域'。"
-    read -p "请输入 Cloudflare API Token: " CF_API_TOKEN
+    if [[ -z "$CF_API_TOKEN" ]]; then
+        echo -e "\n${CYAN}获取 API Token:${PLAIN}"
+        echo -e "   - 电脑端访问: https://dash.cloudflare.com/profile/api-tokens"
+        echo -e "   - 点击 '创建令牌' -> 使用 '编辑 Cloudflare Workers' 模板。"
+        [ ! -z "$CF_API_TOKEN" ] && echo -e "   - 当前记录: ${CYAN}${CF_API_TOKEN:0:6}******${PLAIN}"
+        read -p "请输入 Cloudflare API Token: " INPUT_API_TOKEN
+        CF_API_TOKEN="${INPUT_API_TOKEN:-$CF_API_TOKEN}"
+    fi
     
     if [[ -z "$CF_ACCOUNT_ID" || -z "$CF_API_TOKEN" ]]; then
         log_err "Account ID 或 Token 不能为空，取消自动化部署。"
         return 1
     fi
+    
+    save_env
 
     # [v1.7.0] 创建 D1 数据库并初始化 Schema
     log_info "确保依赖环境 (jq)..."
