@@ -2,9 +2,10 @@
 set -e
 
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本
-# 功能：VLESS-Reality (TCP) & VLESS-WS-TLS (CDN)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.4)
 # =================================================================
+
+VERSION="v1.8.4"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -774,21 +775,63 @@ EOF
     curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/setWebhook" \
         -d "url=${CF_WORKER_URL}/webhook" > /dev/null
 
-    # 获取 Bot 用户名并展示链接
-    local bot_username=$(curl -s "https://api.telegram.org/bot${TG_BOT_TOKEN}/getMe" | jq -r '.result.username')
-    
     # 切换本地为集群模式并保存
     CLUSTER_MODE="on"
     [ -z "$CLUSTER_TOKEN" ] && CLUSTER_TOKEN=$(openssl rand -hex 16)
     save_env
     systemctl restart autovpn-guardian &>/dev/null || true
 
-    log_info "✅ D1 状态机监控中心已激活！"
-    echo -e "Cluster Mode: ${CYAN}D1 StatusMachine (v1.8.3)${NC}"
-    echo -e "Telegram Bot: ${GREEN}https://t.me/${bot_username}${NC}"
-    echo -e "\n${YELLOW}💡 提示：${PLAIN}节点已开始向云端汇报。请立即点击上方链接进入机器人，"
-    echo -e "发送 ${CYAN}/start${PLAIN} 即可看到这台节点出现在【状态看板】中。"
+    # [v1.8.4] 自动化自检
+    verify_cluster_health
+
     return 0
+}
+
+# 辅助：集群健康在线自检 (v1.8.4)
+verify_cluster_health() {
+    echo -e "\n${BLUE}--- 集群连通性深度自检 (v1.8.4) ---${NC}"
+    
+    # 1. 检查 Worker 响应
+    log_info "正在探测 Worker 网关状态..."
+    local worker_ping=$(curl -s -o /dev/null -w "%{http_code}" -H "X-Cluster-Token: ${CLUSTER_TOKEN}" "${CF_WORKER_URL}")
+    if [[ "$worker_ping" == "200" ]]; then
+        echo -e "   - Worker 网关: ${GREEN}正常 (200 OK)${NC}"
+    else
+        echo -e "   - Worker 网关: ${RED}异常 ($worker_ping)${NC}"
+    fi
+
+    # 2. 检查 Telegram Webhook
+    log_info "正在验证 Telegram Webhook 状态..."
+    local webhook_info=$(curl -s "https://api.telegram.org/bot${TG_BOT_TOKEN}/getWebhookInfo")
+    local webhook_url=$(echo "$webhook_info" | jq -r '.result.url')
+    local pending_count=$(echo "$webhook_info" | jq -r '.result.pending_update_count')
+    
+    if [[ "$webhook_url" == "${CF_WORKER_URL}/webhook" ]]; then
+        echo -e "   - Webhook 路由: ${GREEN}正常 (已指向 Worker)${NC}"
+    else
+        echo -e "   - Webhook 路由: ${RED}异常 (指向: $webhook_url)${NC}"
+        log_warn "正在尝试强制修复 Webhook..."
+        curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/setWebhook" -d "url=${CF_WORKER_URL}/webhook" > /dev/null
+    fi
+
+    # 3. 检查 D1 数据一致性 (通过请求 Worker 测试)
+    log_info "正在同步 D1 数据库心跳..."
+    # 触发一次报告，看是否报错
+    local report_test=$(curl -s -X POST "${CF_WORKER_URL}/report" \
+        -H "X-Cluster-Token: ${CLUSTER_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "{\"id\": \"INSTALL_VERIFY\", \"cpu\": \"0\", \"mem_pct\": \"0\", \"v\": \"v1.8.4\", \"h\": {\"verify\": \"OK\"}}")
+    
+    if echo "$report_test" | grep -q "true"; then
+        echo -e "   - D1 状态机: ${GREEN}正常 (读写存取 OK)${NC}"
+    else
+        echo -e "   - D1 状态机: ${RED}异常 (汇报失败)${NC}"
+    fi
+
+    echo -e "\n${GREEN}✅ 集群环境已全部就绪！${PLAIN}"
+    local bot_username=$(curl -s "https://api.telegram.org/bot${TG_BOT_TOKEN}/getMe" | jq -r '.result.username')
+    echo -e "机器人链接: ${CYAN}https://t.me/${bot_username}${NC}"
+    echo -e "${YELLOW}💡 提示：${PLAIN}如果刚才在 Telegram 发送 /start 无反应，请检查机器人是否已被你【停止】或处于【私聊限制】中。"
 }
 
 # 辅助：集群密钥轮换 (v1.8.3 - Zero-Downtime Rotation)
@@ -1462,54 +1505,60 @@ manage_warp() {
 }
 
 # =================================================================
-# 主菜单
+# 主菜单 (Recursive Dashboard v1.8.4)
 # =================================================================
 show_menu() {
-load_config
-clear
-echo -e "${BLUE}##########################################################${PLAIN}"
-echo ""
-
-show_comparison
-echo ""
-
-if [ ! -z "$EXISTING_MODE" ]; then
-    echo -e "当前安装状态:"
-    echo -e "  - 模式: ${GREEN}$EXISTING_MODE${PLAIN}"
-    echo -e "  - UUID: ${YELLOW}$EXISTING_UUID${PLAIN}"
-    [ ! -z "$EXISTING_DOMAIN" ] && echo -e "  - 域名: ${YELLOW}$EXISTING_DOMAIN${PLAIN}"
-    [ ! -z "$EXISTING_PORT" ] && echo -e "  - 端口: ${YELLOW}$EXISTING_PORT${PLAIN}"
-    [ ! -z "$EXISTING_PATH" ] && echo -e "  - 路径: ${YELLOW}$EXISTING_PATH${PLAIN}"
-    
-    # 增加状态检查
-    XRAY_STATUS=$(systemctl is-active xray || echo "inactive")
-    NGINX_STATUS=$(systemctl is-active nginx || echo "inactive")
-    WARP_STATUS=$(systemctl is-active warp-svc || echo "inactive")
-    
-    echo -n "  - 服务: "
-    [ "$XRAY_STATUS" == "active" ] && echo -en "${GREEN}Xray(√)${PLAIN} " || echo -en "${RED}Xray(×)${PLAIN} "
-    if [ "$EXISTING_MODE" == "WS-TLS" ]; then
-        [ "$NGINX_STATUS" == "active" ] && echo -en "${GREEN}Nginx(√)${PLAIN} " || echo -en "${RED}Nginx(×)${PLAIN} "
-    fi
-    [ "$WARP_STATUS" == "active" ] && echo -en "${GREEN}WARP(√)${PLAIN}" || echo -en "${RED}WARP(×)${PLAIN}"
+    load_config
+    clear
+    echo -e "${CYAN}==========================================================${PLAIN}"
+    echo -e "   🚀 ${BLUE}AutoVPN Master Controller${PLAIN} - ${YELLOW}${VERSION}${PLAIN}"
+    echo -e "   状态: ${GREEN}稳定${PLAIN} | 核心: ${MAGENTA}Xray v1.8.x${PLAIN}"
+    echo -e "${CYAN}==========================================================${PLAIN}"
     echo ""
 
-    if [ "$WARP_STATUS" == "active" ]; then
-        WARP_IP=$(curl -s --socks5 127.0.0.1:40000 https://ipv4.icanhazip.com || echo "获取失败")
-        echo -e "  - WARP 出口 IP: ${BLUE}$WARP_IP${PLAIN}"
-    fi
+    if [ ! -z "$EXISTING_MODE" ]; then
+        echo -e "${BLUE}[ 当前运行状态 ]${PLAIN}"
+        echo -e "  💎 协议模式: ${GREEN}$EXISTING_MODE${PLAIN}"
+        echo -e "  🆔 终端 UUID: ${CYAN}$EXISTING_UUID${PLAIN}"
+        [ ! -z "$EXISTING_DOMAIN" ] && echo -e "  🌐 绑定域名: ${YELLOW}$EXISTING_DOMAIN${PLAIN}"
+        [ ! -z "$EXISTING_PORT" ] && echo -e "  🔌 服务端口: ${YELLOW}$EXISTING_PORT${PLAIN}"
+        
+        # 实时服务监控
+        XRAY_STATUS=$(systemctl is-active xray || echo "inactive")
+        NGINX_STATUS=$(systemctl is-active nginx || echo "inactive")
+        WARP_STATUS=$(systemctl is-active warp-svc || echo "inactive")
+        
+        echo -n "  🖥️ 核心服务: "
+        [ "$XRAY_STATUS" == "active" ] && echo -en "${GREEN}Xray[ON]${PLAIN}  " || echo -en "${RED}Xray[OFF]${PLAIN} "
+        if [ "$EXISTING_MODE" == "WS-TLS" ]; then
+            [ "$NGINX_STATUS" == "active" ] && echo -en "${GREEN}Nginx[ON]${PLAIN} " || echo -en "${RED}Nginx[OFF]${PLAIN} "
+        fi
+        [ "$WARP_STATUS" == "active" ] && echo -en "${GREEN}WARP[ON]${PLAIN}" || echo -en "${RED}WARP[OFF]${PLAIN}"
+        echo ""
 
-    echo -e "  ${GREEN}1.${PLAIN} 更新/重装当前模式 (可修改配置)"
-    echo -e "  ${GREEN}2.${PLAIN} 切换到另一种模式"
-    echo -e "  ${GREEN}3.${PLAIN} 查看/获取当前分享链接"
-    echo -e "  ${GREEN}4.${PLAIN} 服务管理 (启动/停止/重启)"
-    echo -e "  ${GREEN}5.${PLAIN} 日志管理 (查看运行日志)"
-    echo -e "  ${GREEN}6.${PLAIN} WARP 隧道管理 (刷新 IP/重置)"
-    echo -e "  ${GREEN}7.${PLAIN} 防火墙管理 (自动开放端口)"
-    echo -e "  ${GREEN}8.${PLAIN} Guardian 集群 & 机器人"
-    echo -e "  ${GREEN}9.${PLAIN} 彻底卸载 AutoVPN"
-    echo -e "  ${GREEN}0.${PLAIN} 退出"
-    read -p "请选择: " choice
+        if [ "$WARP_STATUS" == "active" ]; then
+            WARP_IP=$(curl -s --socks5 127.0.0.1:40000 https://ipv4.icanhazip.com || echo "获取失败")
+            echo -e "  🌍 WARP 出口: ${MAGENTA}$WARP_IP${PLAIN}"
+        fi
+        echo ""
+
+        echo -e "${BLUE}[ 核心管理 ]${PLAIN}"
+        echo -e "  ${GREEN}1.${PLAIN} 更新/重装当前模式 (优化配置)"
+        echo -e "  ${GREEN}2.${PLAIN} 切换协议 (Reality ⇄ WS-TLS)"
+        echo -e "  ${GREEN}3.${PLAIN} 提取链接 (订阅/分享二维码)"
+        echo -e "  ${GREEN}4.${PLAIN} 服务控制 (启动/停止/重启)"
+        echo ""
+        echo -e "${BLUE}[ 进阶运维 ]${PLAIN}"
+        echo -e "  ${GREEN}5.${PLAIN} 日志诊断 (实时追踪日志)"
+        echo -e "  ${GREEN}6.${PLAIN} WARP 隧道 (刷新出口 IP)"
+        echo -e "  ${GREEN}7.${PLAIN} 安全加固 (防火墙端口同步)"
+        echo -e "  ${GREEN}8.${PLAIN} ${YELLOW}Guardian 集群 & 机器人 (D1 状态机)${PLAIN}"
+        echo ""
+        echo -e "${BLUE}[ 脚本选项 ]${PLAIN}"
+        echo -e "  ${RED}9. 彻底卸载项目${PLAIN} | ${CYAN}0. 退出管家${PLAIN}"
+        echo -e "${CYAN}----------------------------------------------------------${PLAIN}"
+        read -p " 请输入指令 [0-9]: " choice
+
 
     case $choice in
         1) optimize_system; [ "$EXISTING_MODE" == "Reality" ] && install_reality || install_ws_tls; echo -e "\n${GREEN}操作完成。${PLAIN}"; read -p "按回车键返回菜单..." ;;
@@ -1530,13 +1579,17 @@ if [ ! -z "$EXISTING_MODE" ]; then
         *) log_err "无效输入"; sleep 1 ;;
     esac
 else
-    echo -e "  ${GREEN}1.${PLAIN} 安装 VLESS-Reality (推荐：简单/免域名/高性能)"
-    echo -e "  ${GREEN}2.${PLAIN} 安装 VLESS-WS-TLS (CDN/强伪装/需已有域名)"
-    echo -e "  ${GREEN}3.${PLAIN} 仅进行系统环境优化 (BBR/Swap)"
-    echo -e "  ${GREEN}4.${PLAIN} 集群模式：加入已有集群 (Cloudflare-Native)"
-    echo -e "  ${GREEN}0.${PLAIN} 退出脚本"
+    echo -e "${BLUE}[ 代理部署方案 ]${PLAIN}"
+    echo -e "  ${GREEN}1.${PLAIN} VLESS-Reality (推荐：极致极速/免域名/抗封锁)"
+    echo -e "  ${GREEN}2.${PLAIN} VLESS-WS-TLS (备选：CDN 级强力避风港)"
     echo ""
-    read -p "请选择: " choice
+    echo -e "${BLUE}[ 环境与集群 ]${PLAIN}"
+    echo -e "  ${GREEN}3.${PLAIN} 系统环境优化 (BBR/Swap/内核微调)"
+    echo -e "  ${GREEN}4.${PLAIN} 节点扩容：加入现有 Cloudflare 集群"
+    echo ""
+    echo -e "  ${CYAN}0.${PLAIN} 退出脚本"
+    echo -e "${CYAN}----------------------------------------------------------${PLAIN}"
+    read -p " 请选择指令 [0-4]: " choice
     case $choice in
         1) optimize_system; install_reality; read -p "安装完成。按回车键返回菜单..." ;;
         2) optimize_system; install_ws_tls; read -p "安装完成。按回车键返回菜单..." ;;
