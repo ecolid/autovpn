@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.6 - Unified Command Center)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.7 - Fatal Path Fix)
 # =================================================================
 
-VERSION="v1.9.6"
+VERSION="v1.9.7"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -459,7 +459,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.9.6)..."
+    log_info "正在配置云端 D1 数据库 (v1.9.7)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -1162,11 +1162,11 @@ setup_guardian_bot() {
         fi
     fi
 
-    # 创建驱动脚本 (v1.9.6 - Dashboard Intelligence)
+    # 创建驱动脚本 (v1.9.7 - Fatal Path Fix)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, statistics, sys, socket
 
-VERSION = "1.9.6"
+VERSION = "1.9.7"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
 
@@ -1250,7 +1250,9 @@ def main():
                     elif task["cmd"] == "SELF_UPDATE":
                         res = run_shell("wget -qO /tmp/install.sh https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh && bash /tmp/install.sh --update-bot --silent")
                     else:
-                        res = run_shell(f"bash /usr/local/bin/autovpn {task['cmd']}")
+                        target = "/usr/local/bin/autovpn"
+                        if not os.path.exists(target): target = "/usr/local/etc/autovpn/install.sh"
+                        res = run_shell(f"bash {target} {task['cmd']}")
                     requests.post(f"{cf_url}/report", json=get_status_data(tid=task['task_id'], res=res), 
                                  headers={"X-Cluster-Token": c_token}, timeout=10)
         except: pass
@@ -1277,7 +1279,12 @@ EOF
 
     systemctl daemon-reload
     systemctl enable autovpn-guardian && systemctl restart autovpn-guardian
-    log_info "✅ Guardian 集群服务已刷新"
+    
+    # [v1.9.7] 关键路径修复：建立全局软链接
+    ln -sf /usr/local/etc/autovpn/install.sh /usr/local/bin/autovpn
+    chmod +x /usr/local/bin/autovpn
+    
+    log_info "✅ Guardian 集群服务与全局指令已刷新"
     
     # 清理旧的 monitor 任务
     systemctl stop autovpn-monitor.timer 2>/dev/null || true
