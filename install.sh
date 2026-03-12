@@ -1,10 +1,8 @@
-#!/usr/bin/env bash
-
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.8)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.9)
 # =================================================================
 
-VERSION="v1.8.8"
+VERSION="v1.8.9"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -34,7 +32,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# 辅助：Cloudflare API 调用器 (v1.8.8 - Integrity Shield)
+# 辅助：Cloudflare API 调用器 (v1.8.9 - Vision Patch)
 cf_api() {
     local method="$1"
     local path="$2"
@@ -44,9 +42,9 @@ cf_api() {
     
     local res
     if [[ -z "$body" ]]; then
-        res=$(curl -s -f -X "$method" "$url" -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" 2>&1)
+        res=$(curl -s -X "$method" "$url" -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" 2>&1)
     else
-        res=$(curl -s -f -X "$method" "$url" -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" -d "$body" 2>&1)
+        res=$(curl -s -X "$method" "$url" -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" -d "$body" 2>&1)
     fi
 
     local curl_exit=$?
@@ -453,8 +451,8 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.8.8)..."
-    local d1_res
+    log_info "正在配置云端 D1 数据库 (v1.8.9)..."
+    local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
         log_warn "正尝试获取已有 D1 实例..."
@@ -478,36 +476,9 @@ deploy_cf_worker() {
 
     # 部署 Worker (带 D1 绑定 - 严格模式)
     log_info "正在上传并绑定 Worker 脚本..."
-    local worker_js=$(cat /tmp/worker.js | sed "s/your_private_token_here/${CLUSTER_TOKEN}/g")
-    
-    cat > /tmp/metadata.json <<EOF
-{
-  "main_module": "index.js",
-  "bindings": [
-    { "type": "d1", "name": "DB", "id": "$d1_id" }
-  ]
-}
-EOF
-    # 使用 cf_api 封装上传 (PUT 脚本)
-    # 注意：Worker 上传接口比较特殊，需要 multipart 格式，cf_api 目前只支持 JSON
-    # 临时改用 curl 直连，但必须严格检查退出码
-    local upload_res=$(curl -s -f -X PUT "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/autovpn-relay" \
-        -H "Authorization: Bearer ${CF_API_TOKEN}" \
-        -F "metadata=@/tmp/metadata.json;type=application/json" \
-        -F "index.js=$worker_js;type=application/javascript+module" 2>&1)
-    
-    if [[ $? -ne 0 ]]; then
-        log_err "Worker 脚本上传物理失败!"
-        echo -e "${YELLOW}详情: $upload_res${NC}"
-        return 1
-    fi
-
-    # 激活 workers.dev 路由
-    log_info "正在发布 Worker 到 workers.dev 子域名..."
-    cf_api POST "/workers/scripts/autovpn-relay/subdomain" '{"enabled": true}' > /dev/null || return 1
-cat > /tmp/worker.js <<'EOF_JS'
+    cat > /tmp/worker.js <<'EOF_JS'
 /**
- * Cloudflare Worker for AutoVPN Guardian Cluster (v1.8.8 - Integrity Shield)
+ * Cloudflare Worker for AutoVPN Guardian Cluster (v1.8.9 - Vision Patch)
  * Orchestrates: Inter-node Rescue, Interactive Deployment Wizard, Bulk Updates.
  */
 
@@ -819,50 +790,38 @@ function parseVless(link) {
         return { uuid, ip: host, port: parseInt(port), mode, domain: params.get('sni') || "" };
     } catch (e) { return null; }
 }
-async function sendTelegram(t, c, text, rm, eid) {
-    const url = `https://api.telegram.org/bot${t}/${eid ? 'editMessageText' : 'sendMessage'}`;
-    const b = { chat_id: c, text, parse_mode: "HTML" };
-    if (eid) b.message_id = eid;
-    if (rm) b.reply_markup = rm;
-    await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
-}
-EOF_JS
-    local worker_js=$(cat /tmp/worker.js | sed "s/your_private_token_here/${CLUSTER_TOKEN}/g")
-    
+    # 准备 Worker 上传
+    local worker_js_final=$(cat /tmp/worker.js | sed "s/your_private_token_here/${CLUSTER_TOKEN}/g")
     cat > /tmp/metadata.json <<EOF
 {
   "main_module": "index.js",
-  "bindings": [
-    { "type": "d1", "name": "DB", "id": "$d1_id" }
-  ]
+  "bindings": [ { "type": "d1", "name": "DB", "id": "$d1_id" } ]
 }
 EOF
-    curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/autovpn-relay" \
+    local upload_res=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/autovpn-relay" \
         -H "Authorization: Bearer ${CF_API_TOKEN}" \
         -F "metadata=@/tmp/metadata.json;type=application/json" \
-        -F "index.js=$worker_js;type=application/javascript+module" > /dev/null
+        -F "index.js=$worker_js_final;type=application/javascript+module" 2>&1)
+    
+    if [[ $? -ne 0 ]] || ! echo "$upload_res" | grep -q '"success":true'; then
+        log_err "Worker 脚本上传失败!"
+        echo -e "${YELLOW}接口详情: ${NC}\n$upload_res"
+        return 1
+    fi
 
-    # 激活 workers.dev 路由 (v1.8.5.1)
+    # 激活 workers.dev 路由
     log_info "正在发布 Worker 到 workers.dev 子域名..."
-    curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/autovpn-relay/subdomain" \
-        -H "Authorization: Bearer ${CF_API_TOKEN}" \
-        -H "Content-Type: application/json" \
-        -d '{"enabled": true}' > /dev/null
+    cf_api POST "/workers/scripts/autovpn-relay/subdomain" '{"enabled": true}' > /dev/null || return 1
 
-    # 获取并校验 subdomain (v1.8.7 交互引导)
+    # 获取并校验 subdomain
     log_info "正在配置 Webhook 路由监控..."
     local subdomain=""
     while [[ -z "$subdomain" || "$subdomain" == "null" ]]; do
         local subdomain_res=$(cf_api GET "/workers/subdomain") || return 1
         subdomain=$(echo "$subdomain_res" | jq -r '.result.subdomain')
-        
         if [[ "$subdomain" == "null" || -z "$subdomain" ]]; then
             log_err "检测到你的 CF 账户尚未配置 workers.dev 子域名。"
-            echo -e "${YELLOW}引导引导：${NC}"
-            echo -e "  1. 登录 Cloudflare 控制台。"
-            echo -e "  2. 点击左侧 ${BLUE}Workers & Pages${NC} -> ${BLUE}Plans & Settings${NC}。"
-            echo -e "  3. 在 ${CYAN}Subdomain${NC} 栏目点击 ${CYAN}Change${NC} 或 ${CYAN}Setup${NC}，随便设置一个名字。"
-            echo -e "  4. 设置完成后，请回到此处按 ${GREEN}回车键${NC} 重新尝试。"
+            echo -e "请按照上方 [v1.8.7] 引导完成配置后按回车重试。"
             read -p "等待中 (按回车重试)..."
         fi
     done
@@ -885,9 +844,8 @@ EOF
         echo -e "💡 提示：如果刚才在 Telegram 发送 /start 无反应，请尝试删除并重新开始对话。"
     else
         echo -e "\n${RED}⚠️ 集群部署虽然已完成，但部分自检未通过。${NC}"
-        echo -e "建议根据上方 [ERROR] 提示进行排查，或在 Telegram 手动测试。"
+        echo -e "建议根据上方 [ERROR] 提示进行排查。"
     fi
-
     return 0
 }
 
@@ -922,11 +880,11 @@ verify_cluster_health() {
     fi
 
     # 3. 检查 D1 数据一致性
-    log_info "正在同步 D1 数据库心跳..."
+    log_info "正在同步 D1 数据库 heartbeats..."
     local report_test=$(curl -s -X POST "${CF_WORKER_URL}/report" \
         -H "X-Cluster-Token: ${CLUSTER_TOKEN}" \
         -H "Content-Type: application/json" \
-        -d "{\"id\": \"INSTALL_VERIFY\", \"cpu\": \"0\", \"mem_pct\": \"0\", \"v\": \"v1.8.7\", \"h\": {\"verify\": \"OK\"}}")
+        -d "{\"id\": \"INSTALL_VERIFY\", \"cpu\": \"0\", \"mem_pct\": \"0\", \"v\": \"v1.8.9\", \"h\": {\"verify\": \"OK\"}}")
     
     if echo "$report_test" | grep -q "true"; then
         echo -e "   - D1 状态机: ${GREEN}正常 (读写存取 OK)${NC}"
