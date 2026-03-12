@@ -32,14 +32,23 @@ export default {
             }
 
             const healthStr = JSON.stringify(data.h || {});
-            const isSelected = node ? node.is_selected : 0; // 记录原有选中状态
+            const trafficStr = JSON.stringify(data.traff || { up: 0, down: 0 });
+            const qualityStr = JSON.stringify(data.qual || {});
+            const isSelected = node ? node.is_selected : 0;
 
             await env.DB.prepare(`
-                INSERT INTO nodes (id, cpu, mem_pct, v, t, state, health, ip, alert_sent, is_selected) 
-                VALUES (?, ?, ?, ?, ?, 'online', ?, ?, 0, ?)
+                INSERT INTO nodes (id, cpu, mem_pct, v, t, state, health, traffic_total, quality, ip, alert_sent, is_selected) 
+                VALUES (?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, 0, ?)
                 ON CONFLICT(id) DO UPDATE SET 
-                cpu=EXCLUDED.cpu, mem_pct=EXCLUDED.mem_pct, v=EXCLUDED.v, t=EXCLUDED.t, state='online', health=EXCLUDED.health, ip=EXCLUDED.ip, alert_sent=0
-            `).bind(data.id, data.cpu, data.mem_pct, data.v, now, healthStr, data.ip || '0.0.0.0', isSelected).run();
+                cpu=EXCLUDED.cpu, mem_pct=EXCLUDED.mem_pct, v=EXCLUDED.v, t=EXCLUDED.t, state='online', health=EXCLUDED.health, 
+                traffic_total=EXCLUDED.traffic_total, quality=EXCLUDED.quality, ip=EXCLUDED.ip, alert_sent=0
+            `).bind(data.id, data.cpu, data.mem_pct, data.v, now, healthStr, trafficStr, qualityStr, data.ip || '0.0.0.0', isSelected).run();
+
+            // 每 15 分钟存一个快照 (简单降频逻辑)
+            if (now % 900 < 15) {
+                await env.DB.prepare("INSERT INTO traffic_snapshots (node_id, up, down, t) VALUES (?, ?, ?, ?)")
+                    .bind(data.id, data.traff?.up || 0, data.traff?.down || 0, now).run();
+            }
 
             if (data.task_id && data.result) {
                 await env.DB.prepare("UPDATE commands SET result = ?, status = 'done', completed_at = ? WHERE task_id = ? AND target_id = ?")
@@ -122,11 +131,27 @@ async function handleTelegramUpdate(update, env) {
         await sendTelegram(BOT_TOKEN, CHAT_ID, res, { inline_keyboard: btns }, update.callback_query?.message.message_id);
     }
 
-    // 2. Selection Toggle
-    if (cbData?.startsWith("chk_")) {
-        const nodeId = cbData.split("_")[1];
-        await env.DB.prepare("UPDATE nodes SET is_selected = 1 - is_selected WHERE id = ?").bind(nodeId).run();
-        return await handleTelegramUpdate({ callback_query: { data: "show_status", message: msg } }, env);
+    // 2. Data Stats Board (v1.8.0)
+    if (text === "/stats" || cbData === "show_stats") {
+        const nodes = await env.DB.prepare("SELECT * FROM nodes ORDER BY t DESC").all();
+        let report = "📊 <b>AutoVPN 数据罗盘 (v1.8.0)</b>\n\n";
+
+        for (const s of nodes.results) {
+            let t = { up: 0, down: 0 }, q = { china: { lat: 0, jit: 0, loss: 0 } };
+            try { t = JSON.parse(s.traffic_total || "{}"); } catch (e) { }
+            try { q = JSON.parse(s.quality || "{}"); } catch (e) { }
+
+            const upGB = (t.up / (1024 ** 3)).toFixed(2);
+            const downGB = (t.down / (1024 ** 3)).toFixed(2);
+            const lossIcon = q.china?.loss > 5 ? "⚠️" : "✅";
+
+            report += `🖥 <b>${s.id}</b>\n`;
+            report += `├ 流量: 🔼 ${upGB}GB | 🔽 ${downGB}GB\n`;
+            report += `└ 线路: 📶 ${q.china?.lat || 0}ms | ⏳ ${q.china?.jit || 0}ms | ${lossIcon} ${q.china?.loss || 0}%\n\n`;
+        }
+
+        const btns = [[{ text: "🔄 刷新统计", callback_data: "show_stats" }]];
+        await sendTelegram(BOT_TOKEN, CHAT_ID, report, { inline_keyboard: btns }, update.callback_query?.message.message_id);
     }
 
     // 3. Rescue logic

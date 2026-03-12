@@ -349,10 +349,13 @@ deploy_cf_worker() {
             t INTEGER, 
             state TEXT DEFAULT 'online',
             health TEXT DEFAULT '{}',
+            traffic_total TEXT DEFAULT '{}',
+            quality TEXT DEFAULT '{}',
             ip TEXT,
             is_selected INTEGER DEFAULT 0, 
             alert_sent INTEGER DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS traffic_snapshots (node_id TEXT, up INTEGER, down INTEGER, t INTEGER);
         CREATE TABLE IF NOT EXISTS commands (id INTEGER PRIMARY KEY AUTOINCREMENT, target_id TEXT, cmd TEXT, task_id INTEGER, result TEXT, status TEXT DEFAULT 'pending', completed_at INTEGER);
         CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, val TEXT);
         INSERT OR REPLACE INTO config (key, val) VALUES ('BOT_TOKEN', '$TG_BOT_TOKEN');
@@ -485,79 +488,57 @@ setup_guardian_bot() {
 
     # 创建驱动脚本 (v1.7.0 - High-Freq StateAgent)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
-import requests, time, subprocess, os, json, sys, socket
+import requests, time, subprocess, os, json, sys, socket, statistics
 
-VERSION = "v1.7.0"
+VERSION = "v1.8.0"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
 
-# [v1.7.0] 救援工模式 - 由 SSH 远程触发
-if "--rescue-worker" in sys.argv:
-    # 尝试多种修复手段
-    os.system("pkill -9 -f guardian.py")
-    os.system("systemctl restart autovpn-guardian")
-    # 也可以顺便重启核心服务
-    os.system("systemctl restart xray")
-    sys.exit(0)
+def run_shell(cmd):
+    try: return subprocess.getoutput(cmd)
+    except: return ""
 
-def get_public_ip():
-    try: return requests.get("https://api.ipify.org", timeout=5).text
-    except: return "0.0.0.0"
-
-def run_cmd(cmd):
-    # ... (existing run_cmd logic)
+def get_traffic():
     try:
-        if cmd.startswith("--") or " " in cmd:
-            full_cmd = f"bash /usr/local/bin/autovpn {cmd}"
-        else:
-            full_cmd = f"bash /usr/local/bin/autovpn --{cmd}"
-        
-        proc = subprocess.Popen(full_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        out, _ = proc.communicate(timeout=60)
-        status = "✅ 成功" if proc.returncode == 0 else "❌ 失败"
-        lines = [l for l in out.split("\n") if l.strip()]
-        summary = "\n".join(lines[-5:]) if lines else "无脚本回显"
-        return f"{status} (退出码: {proc.returncode})\n{summary}"
-    except Exception as e: return f"❌ 执行异常: {str(e)}"
+        res = subprocess.getoutput("/usr/local/bin/xray api statsquery --server=127.0.0.1:10085")
+        up, down = 0, 0
+        for line in res.split("\n"):
+            if "uplink" in line and "value" in line: up += int(line.split(":")[-1].strip())
+            if "downlink" in line and "value" in line: down += int(line.split(":")[-1].strip())
+        return {"up": up, "down": down}
+    except: return {"up": 0, "down": 0}
 
-# [v1.7.0] 哨兵救援指令：发起 SSH 连接
-def perform_rescue(target_ip):
-    key_path = "/usr/local/etc/autovpn/cluster_key"
-    if not os.path.exists(key_path): return "❌ 错误: 本地无集群私钥"
-    
-    # 使用 SSH 连接触发远程机器的 Forced Command
-    ssh_cmd = f"ssh -i {key_path} -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@{target_ip} exit"
-    res = subprocess.run(ssh_cmd, shell=True, capture_output=True, text=True)
-    if res.returncode == 0:
-        return f"✅ 救援指令已成功送达 {target_ip} (SSH 触达成功)"
-    else:
-        return f"❌ 救援失败: {res.stderr or '连接超时'}"
+def measure_quality(target):
+    try:
+        cmd = f"ping -c 5 -W 2 {target}"
+        res = subprocess.getoutput(cmd)
+        if "packet loss" in res:
+            loss = float(res.split("packet loss")[0].split(",")[-1].replace("%", "").strip())
+            times = [float(x.split("=")[-1].replace(" ms", "")) for x in res.split("\n") if "time=" in x]
+            if times:
+                avg = sum(times) / len(times)
+                jitter = statistics.stdev(times) if len(times) > 1 else 0
+                return {"lat": round(avg, 2), "jit": round(jitter, 2), "loss": loss}
+        return {"lat": 0, "jit": 0, "loss": 100}
+    except: return {"lat": 0, "jit": 0, "loss": 100}
 
 def check_health():
-    # ... (existing check_health logic)
-    health = {"xray": "OK", "nginx": "OK", "net": "OK", "warp": "SKIP"}
+    health = {"xray": "OK", "nginx": "OK", "net": "OK"}
     if os.system("systemctl is-active --quiet xray") != 0: health["xray"] = "FAIL"
     if os.system("systemctl is-active --quiet nginx") != 0: health["nginx"] = "FAIL"
-    try:
-        r = requests.get("https://www.google.com/generate_204", timeout=2)
-        if r.status_code != 204: health["net"] = "FAIL"
-    except: health["net"] = "FAIL"
-    if os.path.exists("/usr/local/bin/warp"):
-        warp_res = subprocess.getoutput("warp status")
-        if "Connected" not in warp_res: health["warp"] = "FAIL"
-        else: health["warp"] = "OK"
     return health
 
 def get_status_data(tid=None, res=None):
-    cpu = subprocess.getoutput("top -bn1 | grep 'Cpu(s)' | awk '{print $2}'")
-    mem = subprocess.getoutput("free | grep Mem | awk '{print $3/$2 * 100.0}'")
+    cpu = run_shell("top -bn1 | grep 'Cpu(s)' | awk '{print $2}'")
+    mem = run_shell("free | grep Mem | awk '{print $3/$2 * 100.0}'")
     data = {
-        "id": NODE_ID, 
-        "cpu": cpu or "0", 
-        "mem_pct": mem or "0", 
-        "v": VERSION, 
-        "h": check_health(),
-        "ip": get_public_ip() # v1.7.0 记录 IP 供救援使用
+        "id": NODE_ID, "cpu": cpu or "0", "mem_pct": mem or "0", "v": VERSION, 
+        "h": check_health(), "ip": run_shell("curl -s https://api.ipify.org"),
+        "traff": get_traffic(),
+        "qual": {
+            "china": measure_quality("223.5.5.5"),
+            "global": measure_quality("1.1.1.1")
+        }
     }
     if tid: data["task_id"] = tid; data["result"] = res
     return data
@@ -565,22 +546,23 @@ def get_status_data(tid=None, res=None):
 def main():
     while True:
         try:
+            if not os.path.exists(ENV_PATH): time.sleep(10); continue
             with open(ENV_PATH, "r") as f:
                 env = {l.split("=")[0]: l.split("=")[1].strip().replace('"','') for l in f if "=" in l}
             cf_url, c_token = env.get("CF_WORKER_URL", "").rstrip("/"), env.get("CLUSTER_TOKEN")
-            if not cf_url: break
+            if not cf_url: time.sleep(10); continue
 
-            r = requests.post(f"{cf_url}/report", json=get_status_data(), headers={"X-Cluster-Token": c_token}, timeout=5)
+            r = requests.post(f"{cf_url}/report", json=get_status_data(), headers={"X-Cluster-Token": c_token}, timeout=10)
             if r.status_code == 200:
                 task = r.json()
                 if task.get("cmd"):
-                    # [v1.7.0] 处理内置救援命令
                     if task["cmd"].startswith("rescue_"):
                         target_ip = task["cmd"].split("_")[1]
-                        res = perform_rescue(target_ip)
+                        key_path = "/usr/local/etc/autovpn/cluster_key"
+                        ssh_cmd = f"ssh -i {key_path} -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@{target_ip} exit"
+                        res = "✅ 成功" if os.system(ssh_cmd) == 0 else "❌ 失败"
                     else:
-                        res = run_cmd(task['cmd'])
-                    
+                        res = run_shell(f"bash /usr/local/bin/autovpn {task['cmd']}")
                     requests.post(f"{cf_url}/report", json=get_status_data(tid=task['task_id'], res=res), 
                                  headers={"X-Cluster-Token": c_token}, timeout=10)
         except: pass
@@ -739,27 +721,31 @@ install_reality() {
     cat > /usr/local/etc/xray/config.json <<EOF
 {
   "log": { "loglevel": "warning" },
-  "inbounds": [{
-    "port": $XRAY_PORT,
-    "protocol": "vless",
-    "settings": {
-      "clients": [{ "id": "$UUID", "flow": "xtls-rprx-vision" }],
-      "decryption": "none"
-    },
-    "streamSettings": {
-      "network": "tcp",
-      "security": "reality",
-      "realitySettings": {
-        "show": false,
-        "dest": "$FAKE_DOMAIN:443",
-        "xver": 0,
-        "serverNames": ["$FAKE_DOMAIN"],
-        "privateKey": "$PRIVATE_KEY",
-        "shortIds": ["$SHORT_ID"]
+  "stats": {},
+  "api": { "tag": "api", "services": ["StatsService"] },
+  "policy": {
+    "levels": { "0": { "statsUserUplink": true, "statsUserDownlink": true } },
+    "system": { "statsInboundUplink": true, "statsInboundDownlink": true }
+  },
+  "inbounds": [
+    {
+      "port": $XRAY_PORT, "protocol": "vless",
+      "settings": { "clients": [{ "id": "$UUID", "flow": "xtls-rprx-vision" }], "decryption": "none" },
+      "streamSettings": {
+        "network": "tcp", "security": "reality",
+        "realitySettings": {
+          "show": false, "dest": "$FAKE_DOMAIN:443", "xver": 0,
+          "serverNames": ["$FAKE_DOMAIN"], "privateKey": "$PRIVATE_KEY", "shortIds": ["$SHORT_ID"]
+        }
       }
-    }
-  }],
-  "outbounds": [{ "protocol": "freedom" }]
+    },
+    { "port": 10085, "listen": "127.0.0.1", "protocol": "dokodemo-door", "settings": { "address": "127.0.0.1" }, "tag": "api" }
+  ],
+  "routing": { "rules": [{ "type": "field", "inboundTag": ["api"], "outboundTag": "api" }] },
+  "outbounds": [
+    { "protocol": "freedom", "tag": "direct" },
+    { "protocol": "blackhole", "tag": "api" }
+  ]
 }
 EOF
 
@@ -885,16 +871,30 @@ install_ws_tls() {
     cat > /usr/local/etc/xray/config.json <<EOF
 {
   "log": { "loglevel": "warning" },
-  "inbounds": [{
-    "port": $XRAY_LISTEN_PORT, "listen": "127.0.0.1", "protocol": "vless",
-    "settings": { "clients": [{"id": "$UUID"}], "decryption": "none" },
-    "streamSettings": { "network": "ws", "wsSettings": { "path": "$WS_PATH" } }
-  }],
-  "outbounds": [
-    { "tag": "warp", "protocol": "socks", "settings": { "servers": [{"address": "127.0.0.1", "port": $WARP_PORT}] } },
-    { "tag": "direct", "protocol": "freedom" }
+  "stats": {},
+  "api": { "tag": "api", "services": ["StatsService"] },
+  "policy": {
+    "levels": { "0": { "statsUserUplink": true, "statsUserDownlink": true } },
+    "system": { "statsInboundUplink": true, "statsInboundDownlink": true }
+  },
+  "inbounds": [
+    {
+      "port": $XRAY_LISTEN_PORT, "listen": "127.0.0.1", "protocol": "vless",
+      "settings": { "clients": [{"id": "$UUID"}], "decryption": "none" },
+      "streamSettings": { "network": "ws", "wsSettings": { "path": "$WS_PATH" } }
+    },
+    { "port": 10085, "listen": "127.0.0.1", "protocol": "dokodemo-door", "settings": { "address": "127.0.0.1" }, "tag": "api" }
   ],
-  "routing": { "rules": [{ "type": "field", "outboundTag": "warp", "network": "tcp,udp" }] }
+  "routing": {
+    "rules": [
+      { "type": "field", "inboundTag": ["api"], "outboundTag": "api" }
+    ]
+  },
+  "outbounds": [
+    { "tag": "warp", "protocol": "socks", "settings": { "servers": [{"address": "127.0.0.1", "port": 40000}] } },
+    { "tag": "direct", "protocol": "freedom" },
+    { "tag": "api", "protocol": "blackhole" }
+  ]
 }
 EOF
     systemctl daemon-reload && systemctl enable xray && systemctl restart xray
