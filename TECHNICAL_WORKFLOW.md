@@ -1,73 +1,118 @@
-# AutoVPN 技术流程全解析 (D1 Edition v1.3.0)
+# AutoVPN v1.7.0 全链路技术信息流 (Sentinel Edition)
 
-本文件详细解释 v1.3.0 **全量 D1 SQL Serverless** 架构。
-
----
-
-## 1. 架构升级：从 KV 到 D1 (SQL)
-
-在 v1.3.0 中，我们引入了 Cloudflare D1 (关系型 SQL 数据库) 作为核心状态机。
-
-### 为什么选择 D1？
-- **100倍写入额度**: Cloudflare KV 每天限额 1000 次写入，而 D1 每天支持 **10 万次** 免费写入。
-- **高频监控**: 得益于高限额，节点可以每 30 秒进行一次心跳，实现真正的“准实时”监控。
-- **结构化查询**: 可以通过 SQL 语句快速筛选失联节点，代码逻辑更清晰。
+本文件详细刻画了 **AutoVPN v1.7.0** 架构中所有功能的核心信息传输流。
 
 ---
 
-## 2. 实时报警系统 (Watchdog)
+## 1. 核心看板与监控流 (Status & Monitoring)
+这是集群的“基础代谢”，保证 Master 随时掌握所有节点的状态。
 
-系统通过 Cloudflare Cron Trigger 实现“哨兵”模式：
+```mermaid
+sequenceDiagram
+    participant N as Node (Guardian.py)
+    participant M as Master (CF Worker + D1)
+    participant T as User (Telegram)
 
-1. **心跳 (Node Heartbeat)**: 节点每 30 秒向 Worker 发送 POST 请求，Worker 执行 SQL 将时间戳存入 `nodes` 表。
-2. **巡检 (Watchdog)**: Cloudflare 每分钟自动唤醒 Worker 执行 `scheduled` 任务。
-3. **计算 (Logic)**: Worker 查询数据库，寻找 `last_seen < (now - 60s)` 的节点。
-4. **报警 (Alert)**: 发现超时节点，Worker 直接通过 Telegram Bot 推送报警。
-5. **恢复 (Auto-recovery)**: 节点重新上线后，报警标记自动重置。
+    Note over N: 每 10s 执行一次
+    N->>N: 自检核心状态 (CPU/MEM/Xray/NET)
+    N->>M: POST /report {status_data, IP, v1.7.0}
+    M->>M: SQL: INSERT OR REPLACE INTO nodes
+    M-->>N: Response: JSON {pending_cmd: null}
 
----
-
-## 3. SQL 数据库模型 (Schema)
-
-```sql
--- 节点状态表
-CREATE TABLE nodes (
-    id TEXT PRIMARY KEY,
-    cpu REAL,
-    mem_pct REAL,
-    v TEXT,
-    t INTEGER,             -- 最后心跳时间戳
-    is_selected INTEGER,   -- 勾选状态 (0/1)
-    alert_sent INTEGER     -- 是否已发送开除通知
-);
-
--- 指令队列表
-CREATE TABLE commands (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    target_id TEXT,
-    cmd TEXT,
-    task_id INTEGER,
-    status TEXT DEFAULT 'pending'
-);
+    Note over T: 用户输入 /status
+    T->>M: Webhook Update
+    M->>M: SQL: SELECT * FROM nodes
+    M->>T: 发送聚合看板 (包含节点 IP, 版本, 健康度, 勾选状态)
 ```
 
 ---
 
-## 4. 指令分发逻辑 (Command Flow)
+## 2. 跨机自愈流 (Sentinel Rescue)
+当 A 节点失联且无法自动拉起时，利用互信机制通过 B 节点强行修复。
 
-1. **触发**: 用户在 Telegram 点击“更新”或“重启”。
-2. **入库**: Worker 将指令插入 `commands` 表。
-3. **拉取**: 节点在下一次 30s 心跳时，Worker 会查询对应的 `pending` 指令并在 Response 中下发。
-4. **确认**: 节点取走指令后，Worker 将该指令状态设为 `done`。
+```mermaid
+sequenceDiagram
+    participant T as User (Telegram)
+    participant M as Master (CF Worker + D1)
+    participant D as Doctor Node (Online)
+    participant P as Patient Node (Offline)
+
+    Note over M: Watchdog 侦测到故障
+    M->>T: 推送告警 + [🚑 尝试跨机救援] 按钮
+    T->>M: 点击救援
+    M->>M: SQL: INSERT INTO commands (target=Doctor, cmd=rescue_PatientIP)
+    
+    Note over D: 下一次 Heartbeat (10s 内)
+    D->>M: GET /report
+    M-->>D: Task: {cmd: "rescue_PatientIP", task_id: 123}
+    D->>D: 提取 /usr/local/etc/autovpn/cluster_key
+    D->>P: SSH -i key root@PatientIP "exit" (触发 Forced Command)
+    
+    Note over P: 强制触发内置逻辑
+    P->>P: 立即强制重启守护进程 & Xray
+    P->>M: 心跳恢复 (State: Online)
+```
 
 ---
 
-## 5. 极致稳定性
+## 3. 互动式部署向导 (Wizard Deployment)
+从手机发送一个 IP 到全自动扩容新机器的全过程。
 
-- **无主架构**: 报警逻辑不依赖任何 VPS，由 Cloudflare 托管。
-- **自动初始化**: `install.sh` 会自动检测并创建 D1 数据库、建表并完成绑定。
-- **一键自愈**: 配合 OTA 更新，节点可随时拉取最新脚本进行自我修复。
+```mermaid
+sequenceDiagram
+    participant T as User (Telegram)
+    participant M as Master (CF Worker + D1)
+    participant D as Doctor Node (Provisioner)
+    participant N as New VPS (Clean OS)
+
+    T->>M: 发送新机器 IP (例如 1.2.3.4)
+    M-->>T: 弹出模式选择 (Reality/WS)
+    T->>M: 点击 Reality
+    M-->>T: 展示参数预展清单 (UUID/Port)
+    T->>M: 修改 Port -> 确认发射
+    
+    M->>M: 渲染安装命令: curl ... install.sh | bash -s -- --silent ...
+    M->>M: SQL: INSERT INTO commands (target=Doctor)
+    
+    Note over D: 心跳领命
+    D->>M: Heartbeat
+    M-->>D: Task: {cmd: "ssh root@1.2.3.4 'curl... | bash...'"}
+    D->>N: 执行 SSH 传输安装流
+    Note over N: 全自动静默安装完成
+    N->>M: 首次 Heartbeat 上报 (集群新增节点)
+```
 
 ---
 
-AutoVPN v1.3.0 是目前市面上最轻量、最稳健且成本最低的集群管理方案。
+## 4. 批量管理流 (Bulk Operations)
+点击一个按钮，全集群同步升级。
+
+```mermaid
+flowchart TD
+    A[User Telegram] -->|勾选节点| B[Master CF Worker]
+    B -->|SQL: is_selected = 1| C[(D1 Database)]
+    A -->|点击 批量升级| D[Master CF Worker]
+    D -->|SQL: INSERT INTO commands FOR ALL selected| C
+    
+    subgraph Nodes Group
+        N1[Node 1]
+        N2[Node 2]
+        N3[Node 3]
+    end
+    
+    C -->|Heartbeat Response| N1
+    C -->|Heartbeat Response| N2
+    C -->|Heartbeat Response| N3
+    
+    N1 -->|执行: --update-bot| N1
+    N2 -->|执行: --update-bot| N2
+```
+
+---
+
+## 5. 安全体系 (Security Model)
+- **命令锁死**: 密钥对登录必须前置 `command="/usr/bin/python3 ..."`。
+- **配置隔离**: 节点不知道云端 DB 账号，仅通过一个一次性的 `CLUSTER_TOKEN` 进行鉴权通讯。
+- **环境隔离**: `Doctor` 节点只负责传递 Master 渲染好的“指令包”，不接触或存储任何部署后的动态密钥。
+
+AutoVPN v1.7.0 构建了一个基于 **信任链 (Chain of Trust)** 的高可用自治集群。

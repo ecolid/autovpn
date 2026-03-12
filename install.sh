@@ -16,13 +16,22 @@ CYAN='\033[0;36m'
 PLAIN='\033[0m'
 NC='\033[0m'
 
-# 处理 OTA 更新指令 (Guardian Bot 调用)
-if [[ "$1" == "--update-bot" ]]; then
-    ENV_PATH="/usr/local/etc/autovpn/.env"
-    if [ -f "$ENV_PATH" ]; then source "$ENV_PATH"; fi
-    # 静默更新机器人逻辑
-    export AUTO_UPDATE_BOT=1
-fi
+# 解析命令行参数 (v1.7.0)
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --silent) MODE="silent"; shift ;;
+        --uuid) UUID="$2"; shift 2 ;;
+        --port) XRAY_PORT="$2"; shift 2 ;;
+        --domain) DOMAIN="$2"; shift 2 ;;
+        --cf-token) CF_TOKEN="$2"; shift 2 ;;
+        --mode) INSTALL_MODE="$2"; shift 2 ;; # 明确指定安装模式 (reality/ws)
+        --update-bot)
+            ENV_PATH="/usr/local/etc/autovpn/.env"
+            if [ -f "$ENV_PATH" ]; then source "$ENV_PATH"; fi
+            AUTO_UPDATE_BOT=1; shift ;;
+        *) shift ;;
+    esac
+done
 
 log_info() { echo -e "${GREEN}[INFO] $1${PLAIN}"; }
 log_warn() { echo -e "${YELLOW}[WARN] $1${PLAIN}"; }
@@ -302,64 +311,8 @@ deploy_cf_worker() {
         return 1
     fi
 
-    log_info "正在检查/创建 KV 命名空间 (AUTOVPN_STORAGE)..."
-    # 查找现有 KV
-    local kv_list=$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/storage/kv/namespaces" \
-        -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json")
-    
-    local kv_id=$(echo "$kv_list" | jq -r '.result[] | select(.title=="AUTOVPN_STORAGE") | .id')
-    
-    if [[ -z "$kv_id" || "$kv_id" == "null" ]]; then
-        log_info "未发现现有空间，正在创建..."
-        local kv_create=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/storage/kv/namespaces" \
-            -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
-            -d '{"title":"AUTOVPN_STORAGE"}')
-        kv_id=$(echo "$kv_create" | jq -r '.result.id')
-    fi
-
-    if [[ -z "$kv_id" || "$kv_id" == "null" ]]; then
-        log_err "KV 空间创建失败，请检查 Token 权限。"
-        return 1
-    fi
-    log_info "✅ KV 空间已就绪: ${kv_id}"
-
-    log_info "正在从 GitHub 获取最新的 Worker 脚本..."
-    local worker_js_path="/tmp/autovpn_worker.js"
-    curl -s -o "$worker_js_path" "https://raw.githubusercontent.com/ecolid/autovpn/main/cf_worker_relay.js"
-    
-    # 写入自定义 Token
-    if [[ -z "$CLUSTER_TOKEN" ]]; then
-        CLUSTER_TOKEN=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
-    fi
-    sed -i "s/your_private_token_here/${CLUSTER_TOKEN}/g" "$worker_js_path"
-
-    log_info "正在部署 Worker 脚本 (autovpn-relay)..."
-    # 准备元数据
-    cat > /tmp/worker_metadata.json <<EOF
-{
-  "main_module": "worker.js",
-  "bindings": [
-    {
-      "type": "kv_namespace",
-      "name": "STATUS_KV",
-      "namespace_id": "${kv_id}"
-    }
-  ]
-}
-EOF
-
-    local deploy_res=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/autovpn-relay" \
-        -H "Authorization: Bearer ${CF_API_TOKEN}" \
-        -F "metadata=@/tmp/worker_metadata.json;type=application/json" \
-        -F "worker.js=@${worker_js_path};type=application/javascript+module")
-
-    if [[ $(echo "$deploy_res" | jq -r '.success') != "true" ]]; then
-        log_err "Worker 部署失败: $(echo "$deploy_res" | jq -r '.errors[0].message')"
-        return 1
-    fi
-    
-    # [v1.5.0] 创建 D1 数据库并初始化 Schema
-    log_info "正在配置云端 D1 数据库 (v1.5.0)..."
+    # [v1.7.0] 创建 D1 数据库并初始化 Schema
+    log_info "正在配置云端 D1 数据库 (v1.7.0)..."
     local d1_res=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database" \
         -H "Authorization: Bearer ${CF_API_TOKEN}" \
         -H "Content-Type: application/json" \
@@ -371,17 +324,17 @@ EOF
     fi
     echo "$d1_id" > /usr/local/etc/autovpn/.d1_id
 
-    log_info "正在初始化任务编排 SQL 表结构 (v1.5.0)..."
+    log_info "正在初始化任务编排 SQL 表结构 (v1.7.0)..."
     local sql_init="
         CREATE TABLE IF NOT EXISTS nodes (
             id TEXT PRIMARY KEY, 
-            ip TEXT,
             cpu REAL, 
             mem_pct REAL, 
             v TEXT, 
             t INTEGER, 
             state TEXT DEFAULT 'online',
             health TEXT DEFAULT '{}',
+            ip TEXT,
             is_selected INTEGER DEFAULT 0, 
             alert_sent INTEGER DEFAULT 0
         );
@@ -390,10 +343,11 @@ EOF
         INSERT OR REPLACE INTO config (key, val) VALUES ('BOT_TOKEN', '$TG_BOT_TOKEN');
         INSERT OR REPLACE INTO config (key, val) VALUES ('CHAT_ID', '$TG_CHAT_ID');
     "
+    local payload=$(jq -n --arg sql "$sql_init" '{"sql": $sql}')
     curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
         -H "Authorization: Bearer ${CF_API_TOKEN}" \
         -H "Content-Type: application/json" \
-        -d "{\"sql\": \"$sql_init\"}" > /dev/null
+        -d "$payload" > /dev/null
 
     # 部署 Worker (带 D1 绑定)
     log_info "正在上传并绑定 Worker 脚本..."
@@ -417,24 +371,58 @@ EOF
         -d "url=https://autovpn-relay.$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/subdomain" -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result.subdomain').workers.dev/webhook" > /dev/null
 
     log_info "✅ D1 状态机监控中心已激活！"
-    echo -e "Cluster Mode: ${CYAN}D1 StatusMachine (v1.5.0)${NC}"
+    echo -e "Cluster Mode: ${CYAN}D1 StatusMachine (v1.7.0)${NC}"
     return 0
 }
 
-    # [v1.7.0] 集群哨兵救援预配置 (SSH 互信)
-    log_info "正在配置集群自愈互信协议 (v1.7.0)..."
-    local key_path="/usr/local/etc/autovpn/cluster_key"
-    if [ ! -f "$key_path" ]; then
-        ssh-keygen -t rsa -b 2048 -f "$key_path" -N "" -q
-    fi
-    local pub_key=$(cat "${key_path}.pub")
-    # 安全加固：Forced Commands (只能执行监控拉起指令)
-    local restricted_entry="command=\"/usr/bin/python3 /usr/local/etc/autovpn/guardian.py --restart-only\",no-agent-forwarding,no-port-forwarding,no-pty $pub_key"
+# 辅助：配置 Guardian Bot (Python 交互式机器人 & 集群增强)
+setup_guardian_bot() {
+    local mode=$1
+    log_info "正在配置 AutoVPN Guardian 集群服务..."
     
-    mkdir -p ~/.ssh && chmod 700 ~/.ssh
-    if ! grep -q "$pub_key" ~/.ssh/authorized_keys 2>/dev/null; then
-        echo "$restricted_entry" >> ~/.ssh/authorized_keys
-        chmod 600 ~/.ssh/authorized_keys
+    # 基础环境检查
+    if ! command -v python3 &> /dev/null; then
+        apt-get update &> /dev/null && apt-get install -y python3 python3-requests &> /dev/null
+    fi
+
+    # [v1.7.0] 集群信任建立与 SSH 密钥同步
+    log_info "正在同步集群互信秘钥 (v1.7.0)..."
+    mkdir -p /usr/local/etc/autovpn/
+    mkdir -p /root/.ssh && chmod 700 /root/.ssh
+    
+    local d1_id=$(cat /usr/local/etc/autovpn/.d1_id 2>/dev/null)
+    if [[ ! -z "$d1_id" ]]; then
+        # 尝试从 D1 获取现有密钥
+        local key_res=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
+            -d "{\"sql\": \"SELECT key, val FROM config WHERE key IN ('SSH_PRV', 'SSH_PUB')\"}")
+        
+        local prv_key=$(echo "$key_res" | jq -r '.result[0].results[] | select(.key=="SSH_PRV") | .val')
+        local pub_key=$(echo "$key_res" | jq -r '.result[0].results[] | select(.key=="SSH_PUB") | .val')
+        
+        if [[ "$prv_key" == "null" || -z "$prv_key" ]]; then
+            log_info "集群尚未初始化密钥，正在生成新密钥对..."
+            ssh-keygen -t rsa -b 2048 -f /tmp/id_cluster -N "" -q
+            prv_key=$(cat /tmp/id_cluster)
+            pub_key=$(cat /tmp/id_cluster.pub)
+            local sql_insert="INSERT OR REPLACE INTO config (key, val) VALUES ('SSH_PRV', '$prv_key'), ('SSH_PUB', '$pub_key')"
+            local payload=$(jq -n --arg sql "$sql_insert" '{"sql": $sql}')
+            curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
+                -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
+                -d "$payload" > /dev/null
+            rm -f /tmp/id_cluster*
+        fi
+        
+        # 写入本地文件
+        echo "$prv_key" > /usr/local/etc/autovpn/cluster_key
+        chmod 600 /usr/local/etc/autovpn/cluster_key
+        
+        # 配置受限的 SSH 登录 (Forced Command)
+        local rescue_cmd="command=\"/usr/bin/python3 /usr/local/etc/autovpn/guardian.py --rescue-worker\""
+        if ! grep -q "$pub_key" /root/.ssh/authorized_keys 2>/dev/null; then
+            echo "${rescue_cmd} ${pub_key}" >> /root/.ssh/authorized_keys
+            log_info "已配置 SSH 互信连接 (自愈专用)"
+        fi
     fi
 
     if [[ "$mode" != "silent" ]]; then
@@ -479,43 +467,65 @@ EOF
         fi
     fi
 
-    # 创建驱动脚本 (v1.5.0 - High-Freq StateAgent)
+    # 创建驱动脚本 (v1.7.0 - High-Freq StateAgent)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, sys, socket
 
-VERSION = "v1.5.0"
+VERSION = "v1.7.0"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
 
+# [v1.7.0] 救援工模式 - 由 SSH 远程触发
+if "--rescue-worker" in sys.argv:
+    # 尝试多种修复手段
+    os.system("pkill -9 -f guardian.py")
+    os.system("systemctl restart autovpn-guardian")
+    # 也可以顺便重启核心服务
+    os.system("systemctl restart xray")
+    sys.exit(0)
+
+def get_public_ip():
+    try: return requests.get("https://api.ipify.org", timeout=5).text
+    except: return "0.0.0.0"
+
 def run_cmd(cmd):
+    # ... (existing run_cmd logic)
     try:
-        # 执行 autovpn 原生指令
         if cmd.startswith("--") or " " in cmd:
             full_cmd = f"bash /usr/local/bin/autovpn {cmd}"
         else:
-            full_cmd = f"bash /usr/local/bin/autovpn --{cmd}" # 补齐前缀
+            full_cmd = f"bash /usr/local/bin/autovpn --{cmd}"
         
         proc = subprocess.Popen(full_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         out, _ = proc.communicate(timeout=60)
-        
-        # 状态感知：区分成功与失败
         status = "✅ 成功" if proc.returncode == 0 else "❌ 失败"
         lines = [l for l in out.split("\n") if l.strip()]
         summary = "\n".join(lines[-5:]) if lines else "无脚本回显"
         return f"{status} (退出码: {proc.returncode})\n{summary}"
     except Exception as e: return f"❌ 执行异常: {str(e)}"
 
+# [v1.7.0] 哨兵救援指令：发起 SSH 连接
+def perform_rescue(target_ip):
+    key_path = "/usr/local/etc/autovpn/cluster_key"
+    if not os.path.exists(key_path): return "❌ 错误: 本地无集群私钥"
+    
+    # 使用 SSH 连接触发远程机器的 Forced Command
+    ssh_cmd = f"ssh -i {key_path} -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@{target_ip} exit"
+    res = subprocess.run(ssh_cmd, shell=True, capture_output=True, text=True)
+    if res.returncode == 0:
+        return f"✅ 救援指令已成功送达 {target_ip} (SSH 触达成功)"
+    else:
+        return f"❌ 救援失败: {res.stderr or '连接超时'}"
+
 def check_health():
+    # ... (existing check_health logic)
     health = {"xray": "OK", "nginx": "OK", "net": "OK", "warp": "SKIP"}
-    # 1. 检查服务
     if os.system("systemctl is-active --quiet xray") != 0: health["xray"] = "FAIL"
     if os.system("systemctl is-active --quiet nginx") != 0: health["nginx"] = "FAIL"
-    # 2. 检查网络 (1秒探测)
     try:
         r = requests.get("https://www.google.com/generate_204", timeout=2)
         if r.status_code != 204: health["net"] = "FAIL"
     except: health["net"] = "FAIL"
-    # 3. 检查 WARP
     if os.path.exists("/usr/local/bin/warp"):
         warp_res = subprocess.getoutput("warp status")
         if "Connected" not in warp_res: health["warp"] = "FAIL"
@@ -525,28 +535,18 @@ def check_health():
 def get_status_data(tid=None, res=None):
     cpu = subprocess.getoutput("top -bn1 | grep 'Cpu(s)' | awk '{print $2}'")
     mem = subprocess.getoutput("free | grep Mem | awk '{print $3/$2 * 100.0}'")
-    # 获取公网 IP (用于救援参考)
-    try: my_ip = requests.get("https://api64.ipify.org", timeout=5).text
-    except: my_ip = "unknown"
-    
     data = {
         "id": NODE_ID, 
-        "ip": my_ip,
         "cpu": cpu or "0", 
         "mem_pct": mem or "0", 
         "v": VERSION, 
-        "h": check_health()
+        "h": check_health(),
+        "ip": get_public_ip() # v1.7.0 记录 IP 供救援使用
     }
     if tid: data["task_id"] = tid; data["result"] = res
     return data
 
 def main():
-    # [v1.7.0] 处理 Rescue 指令 (由集群内其他节点通过受限 SSH 调用)
-    if "--restart-only" in sys.argv:
-        os.system("systemctl restart autovpn-guardian")
-        print("Sentinel: autovpn-guardian restarted successfully.")
-        return
-
     while True:
         try:
             with open(ENV_PATH, "r") as f:
@@ -554,18 +554,21 @@ def main():
             cf_url, c_token = env.get("CF_WORKER_URL", "").rstrip("/"), env.get("CLUSTER_TOKEN")
             if not cf_url: break
 
-            # 1. 高频心跳 (10s 一次) & 读取任务
             r = requests.post(f"{cf_url}/report", json=get_status_data(), headers={"X-Cluster-Token": c_token}, timeout=5)
             if r.status_code == 200:
                 task = r.json()
                 if task.get("cmd"):
-                    # 2. 执行并带回执上报
-                    print(f"Executing: {task['cmd']}")
-                    res = run_cmd(task['cmd'])
+                    # [v1.7.0] 处理内置救援命令
+                    if task["cmd"].startswith("rescue_"):
+                        target_ip = task["cmd"].split("_")[1]
+                        res = perform_rescue(target_ip)
+                    else:
+                        res = run_cmd(task['cmd'])
+                    
                     requests.post(f"{cf_url}/report", json=get_status_data(tid=task['task_id'], res=res), 
                                  headers={"X-Cluster-Token": c_token}, timeout=10)
         except: pass
-        time.sleep(10) # 10秒高频上报，支持极速状态感知
+        time.sleep(10)
 
 if __name__ == "__main__": main()
 EOF
@@ -611,10 +614,16 @@ optimize_system() {
     if [[ "$current_cc" == "bbr" ]]; then
         log_info "检查：系统已启用 BBR 加速，跳过。"
     else
+    if [[ "$MODE" == "silent" ]]; then
+        # 静默模式默认开启 BBR
+        log_info "静默模式：自动开启 BBR..."
+        bbr_choice="y"
+    else
         echo -e "\n${YELLOW}【重要】风险提示：开启 BBR 加速${PLAIN}"
         echo -e "说明：BBR 是 Google 开发的拥塞控制算法，能显著提升丢包环境下的吞吐量。"
         echo -e "风险：在极少数 OpenVZ 架构或内核过旧的服务器上，强制修改参数可能导致网络连接异常。"
         read -p "是否尝试开启 BBR 加速？ [Y/n]: " bbr_choice
+    fi
         if [[ ! "$bbr_choice" =~ ^[Nn]$ ]]; then
             log_info "正在开启 BBR..."
             echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
@@ -673,21 +682,27 @@ install_reality() {
     log_info ">>> 配置 VLESS-Reality (高性能/免域名)..."
     echo -e "${YELLOW}提示: Reality 模式不需要域名，适合追求纯粹速度和稳定性的用户。${PLAIN}"
     
-    echo -e "\n${BLUE}[配置 1/3] 用户 ID (UUID)${PLAIN}"
-    echo -e "说明: 相当于你的连接密码。建议直接回车使用默认生成的随机 ID。"
-    read -p "请输入 UUID [默认: ${EXISTING_UUID:-$(uuidgen)}]: " UUID
-    UUID="${UUID:-${EXISTING_UUID:-$(uuidgen)}}"
-    
-    echo -e "\n${BLUE}[配置 2/3] 监听端口 (Port)${PLAIN}"
-    echo -e "说明: 建议使用 443 端口以获得最佳伪装效果。"
-    echo -e "${RED}注意：如果你的 443 端口已被 Nginx/宝塔或其他程序占用，请更换其他端口（如 10000+）。${PLAIN}"
-    read -p "请输入端口 [默认: ${EXISTING_PORT:-443}]: " XRAY_PORT
-    XRAY_PORT="${XRAY_PORT:-${EXISTING_PORT:-443}}"
-    
-    echo -e "\n${BLUE}[配置 3/3] 伪装域名 (SNI)${PLAIN}"
-    echo -e "说明: 你的 VPS 将伪装成访问此域名的流量。国内用户建议用 www.cloudflare.com 或 www.lovelinux.com。"
-    read -p "请输入伪装域名 [默认: ${EXISTING_SNI:-www.cloudflare.com}]: " FAKE_DOMAIN
-    FAKE_DOMAIN="${FAKE_DOMAIN:-${EXISTING_SNI:-www.cloudflare.com}}"
+    if [[ "$MODE" == "silent" ]]; then
+        XRAY_PORT="${XRAY_PORT:-443}"
+        FAKE_DOMAIN="${FAKE_DOMAIN:-www.cloudflare.com}"
+        UUID="${UUID:-$(uuidgen)}"
+    else
+        echo -e "\n${BLUE}[配置 1/3] 用户 ID (UUID)${PLAIN}"
+        echo -e "说明: 相当于你的连接密码。建议直接回车使用默认生成的随机 ID。"
+        read -p "请输入 UUID [默认: ${EXISTING_UUID:-$(uuidgen)}]: " UUID
+        UUID="${UUID:-${EXISTING_UUID:-$(uuidgen)}}"
+        
+        echo -e "\n${BLUE}[配置 2/3] 监听端口 (Port)${PLAIN}"
+        echo -e "说明: 建议使用 443 端口以获得最佳伪装效果。"
+        echo -e "${RED}注意：如果你的 443 端口已被 Nginx/宝塔或其他程序占用，请更换其他端口（如 10000+）。${PLAIN}"
+        read -p "请输入端口 [默认: ${EXISTING_PORT:-443}]: " XRAY_PORT
+        XRAY_PORT="${XRAY_PORT:-${EXISTING_PORT:-443}}"
+        
+        echo -e "\n${BLUE}[配置 3/3] 伪装域名 (SNI)${PLAIN}"
+        echo -e "说明: 你的 VPS 将伪装成访问此域名的流量。国内用户建议用 www.cloudflare.com 或 www.lovelinux.com。"
+        read -p "请输入伪装域名 [默认: ${EXISTING_SNI:-www.cloudflare.com}]: " FAKE_DOMAIN
+        FAKE_DOMAIN="${FAKE_DOMAIN:-${EXISTING_SNI:-www.cloudflare.com}}"
+    fi
     
     log_info "正在应用配置并启动服务..."
     
@@ -767,31 +782,44 @@ install_ws_tls() {
     log_info ">>> 配置 VLESS-WS-TLS (CDN/强伪装)..."
     echo -e "${YELLOW}提示: 此模式需要你已将域名托管到 Cloudflare。适合在极端网络坏境下使用。${PLAIN}"
     
-    echo -e "\n${BLUE}[配置 1/4] 你的域名${PLAIN}"
-    echo -e "说明: 必须是已在 Cloudflare 解析并托管的域名 (例如: vps.example.com)。"
-    read -p "请输入域名 [当前: ${EXISTING_DOMAIN:-example.com}]: " DOMAIN
-    DOMAIN="${DOMAIN:-${EXISTING_DOMAIN}}"
-    if [ -z "$DOMAIN" ]; then log_err "错误: 域名不能为空"; exit 1; fi
+    if [[ "$MODE" == "silent" ]]; then
+        DOMAIN="${DOMAIN:-$EXISTING_DOMAIN}"
+        UUID="${UUID:-$EXISTING_UUID}"
+        CF_TOKEN="${CF_TOKEN}"
+        [[ -z "$DOMAIN" ]] && { log_err "静默模式安装 WS-TLS 必须提供 --domain 参数"; exit 1; }
+        [[ -z "$CF_TOKEN" ]] && { log_err "静默模式安装 WS-TLS 必须提供 Cloudflare Token"; exit 1; }
+        WS_PATH="${WS_PATH:-${EXISTING_PATH:-/lovelinux}}"
+    else
+        echo -e "\n${BLUE}[配置 1/4] 你的域名${PLAIN}"
+        echo -e "说明: 必须是已在 Cloudflare 解析并托管的域名 (例如: vps.example.com)。"
+        read -p "请输入域名 [当前: ${EXISTING_DOMAIN:-example.com}]: " DOMAIN
+        DOMAIN="${DOMAIN:-${EXISTING_DOMAIN}}"
+        if [ -z "$DOMAIN" ]; then log_err "错误: 域名不能为空"; exit 1; fi
 
-    echo -e "\n${BLUE}[配置 2/4] Cloudflare API Token${PLAIN}"
-    echo -e "说明: 用于自动修改 DNS 记录和申请证书。需要 '区域.DNS:编辑' 权限。"
-    read -p "请输入 API Token [当前: ${CF_TOKEN:-(未填)}]: " INPUT_TOKEN
-    CF_TOKEN="${INPUT_TOKEN:-${CF_TOKEN}}"
-    if [ -z "$CF_TOKEN" ]; then log_err "错误: Token 不能为空"; exit 1; fi
-    
-    echo -e "\n${BLUE}[配置 3/4] 用户 ID (UUID)${PLAIN}"
-    echo -e "说明: 建议直接回车使用系统生成的推荐 ID。"
-    read -p "请输入 UUID [默认: ${EXISTING_UUID:-$(uuidgen)}]: " UUID
-    UUID="${UUID:-${EXISTING_UUID:-$(uuidgen)}}"
-    
-    WS_PATH="${WS_PATH:-${EXISTING_PATH:-/lovelinux}}"
+        echo -e "\n${BLUE}[配置 2/4] Cloudflare API Token${PLAIN}"
+        echo -e "说明: 用于自动修改 DNS 记录和申请证书。需要 '区域.DNS:编辑' 权限。"
+        read -p "请输入 API Token [当前: ${CF_TOKEN:-(未填)}]: " INPUT_TOKEN
+        CF_TOKEN="${INPUT_TOKEN:-${CF_TOKEN}}"
+        if [ -z "$CF_TOKEN" ]; then log_err "错误: Token 不能为空"; exit 1; fi
+        
+        echo -e "\n${BLUE}[配置 3/4] 用户 ID (UUID)${PLAIN}"
+        echo -e "说明: 建议直接回车使用系统生成的推荐 ID。"
+        read -p "请输入 UUID [默认: ${EXISTING_UUID:-$(uuidgen)}]: " UUID
+        UUID="${UUID:-${EXISTING_UUID:-$(uuidgen)}}"
+        
+        WS_PATH="${WS_PATH:-${EXISTING_PATH:-/lovelinux}}"
+    fi
     log_info "正在执行自动化部署任务 (同步 DNS、申请证书、配置 Nginx)..."
     
-    # 4. 可选伪装页面
-    echo -e "\n${BLUE}[配置 4/4] 网站伪装页面${PLAIN}"
-    echo -e "说明：AutoVPN 默认提供一个 2048 小游戏的伪装页面，访问你的域名会显示正常游戏。"
-    read -p "是否部署此伪装页面？ [Y/n]: " decoy_choice
-    decoy_choice="${decoy_choice:-Y}"
+    if [[ "$MODE" == "silent" ]]; then
+        decoy_choice="Y"
+    else
+        # 4. 可选伪装页面
+        echo -e "\n${BLUE}[配置 4/4] 网站伪装页面${PLAIN}"
+        echo -e "说明：AutoVPN 默认提供一个 2048 小游戏的伪装页面，访问你的域名会显示正常游戏。"
+        read -p "是否部署此伪装页面？ [Y/n]: " decoy_choice
+        decoy_choice="${decoy_choice:-Y}"
+    fi
 
     # 环境清理
     systemctl stop nginx || true
@@ -1018,6 +1046,17 @@ main() {
         setup_guardian_bot silent
         log_info "✅ 机器人已完成热更新。"
         exit 0
+    fi
+    # 如果是静默模式，根据 INSTALL_MODE 自动执行
+    if [[ "$MODE" == "silent" ]]; then
+        log_info ">>> 检测到静默安装模式: $INSTALL_MODE"
+        if [[ "$INSTALL_MODE" == "reality" ]]; then
+            optimize_system; install_reality
+            exit 0
+        elif [[ "$INSTALL_MODE" == "ws" ]]; then
+            optimize_system; install_ws_tls
+            exit 0
+        fi
     fi
     show_menu
 }
