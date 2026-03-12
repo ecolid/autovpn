@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.9.4)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.9.5)
 # =================================================================
 
-VERSION="v1.8.9.4"
+VERSION="v1.8.9.5"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -452,7 +452,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.8.9.4)..."
+    log_info "正在配置云端 D1 数据库 (v1.8.9.5)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -807,7 +807,8 @@ EOF
         -F "metadata=@/tmp/metadata.json;type=application/json" \
         -F "index.js=@${worker_js_tmp};type=application/javascript+module" 2>&1)
     
-    if [[ $? -ne 0 ]] || ! echo "$upload_res" | grep -q '"success":true'; then
+    local is_success=$(echo "$upload_res" | jq -r '.success' 2>/dev/null)
+    if [[ "$is_success" != "true" ]]; then
         log_err "Worker 脚本上传失败!"
         echo -e "${YELLOW}接口详情: ${NC}\n$upload_res"
         return 1
