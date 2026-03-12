@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.2 - UI Refinement)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.3 - Final Polish)
 # =================================================================
 
-VERSION="v1.9.2"
+VERSION="v1.9.3"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -459,7 +459,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.9.2)..."
+    log_info "正在配置云端 D1 数据库 (v1.9.3)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -583,12 +583,13 @@ async function handleTelegramUpdate(update, env) {
     if (!update.message && !update.callback_query) return new Response("OK");
     const msg = update.message || update.callback_query.message;
     if (msg.chat.id.toString() !== CHAT_ID) return new Response("OK");
+    const nodeV = VERSION;
 
     const text = update.message ? update.message.text : null;
     const cbData = update.callback_query ? update.callback_query.data : null;
 
     if (text === "/start" || text === "/menu" || cbData === "show_main") {
-        const welcome = "🏰 <b>AutoVPN 守护者集群控制台</b>\n\n当前状态: 🟢 系统运行中\n版本号: <code>v1.9.2</code>\n\n请选择操作模块:";
+        const welcome = `🏰 <b>AutoVPN 守护者集群控制台</b>\n\n当前状态: 🟢 系统运行中\n版本号: <code>v${nodeV}</code>\n\n请选择操作模块:`;
         const btns = [
             [{ text: "📊 节点看板", callback_data: "show_status" }, { text: "📈 数据罗盘", callback_data: "show_stats" }],
             [{ text: "🚑 救援日志", callback_data: "show_rescue" }, { text: "📡 路由管理", callback_data: "show_routing" }],
@@ -653,7 +654,7 @@ async function handleTelegramUpdate(update, env) {
 
     if (text === "/stats" || cbData === "show_stats") {
         const nodes = await env.DB.prepare("SELECT * FROM nodes ORDER BY t DESC").all();
-        let report = "📊 <b>数据罗盘监测 (v1.9.2)</b>\n\n";
+        let report = `📊 <b>数据罗盘监测 (v${nodeV})</b>\n\n`;
         for (const s of nodes.results) {
             if (s.id === 'INSTALL_VERIFY') continue;
             let t = { up: 0, down: 0 }, q = { china: { lat: 0, jit: 0, loss: 0 }, global: { lat: 0, jit: 0, loss: 0 } };
@@ -665,9 +666,10 @@ async function handleTelegramUpdate(update, env) {
             const gL = q.global?.loss > 5 ? "⚠️" : "✅";
             report += `🌩️ <b>${s.id}</b>\n`;
             report += `├ <b>累计流量:</b> 🔼 ${upGB}GB | 🔽 ${downGB}GB\n`;
-            report += `├ <b>国内优选 (AliDNS):</b> 📶 延迟 ${q.china?.lat || 0}ms | ⏳ 抖动 ${q.china?.jit || 0}ms | ${cL} 丢包 ${q.china?.loss || 0}%\n`;
-            report += `└ <b>全球加速 (CF):</b> 📶 延迟 ${q.global?.lat || 0}ms | ⏳ 抖动 ${q.global?.jit || 0}ms | ${gL} 丢包 ${q.global?.loss || 0}%\n\n`;
+            report += `├ <b>国内优选 (223.5.5.5):</b> 📶延时 ${q.china?.lat || 0}ms | 🎢抖动 ${q.china?.jit || 0}ms | ${cL}丢包 ${q.china?.loss || 0}%\n`;
+            report += `└ <b>全球加速 (1.1.1.1):</b> 📶延时 ${q.global?.lat || 0}ms | 🎢抖动 ${q.global?.jit || 0}ms | ${gL}丢包 ${q.global?.loss || 0}%\n\n`;
         }
+        report += "💡 <i>注: 1~10ms 极低延迟通常源于 Anycast 优选路由，属正常高性能表现。</i>";
         const btns = [[{ text: "🔄 刷新", callback_data: "show_stats" }, { text: "🔙 返回", callback_data: "show_main" }]];
         await sendTelegram(BOT_TOKEN, CHAT_ID, report, { inline_keyboard: btns }, update.callback_query?.message.message_id);
     }
@@ -1166,11 +1168,11 @@ setup_guardian_bot() {
         fi
     fi
 
-    # 创建驱动脚本 (v1.9.2 - Data Compass + Sentinel)
+    # 创建驱动脚本 (v1.9.3 - Data Compass + Sentinel)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, statistics, sys, socket
 
-VERSION = "v1.9.2"
+VERSION = "1.9.3"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
 
@@ -1795,7 +1797,15 @@ main() {
         rotate_cluster_keys
         exit 0
     fi
-    # 如果是 BOT 自动更新，则跳过菜单
+    # 如果是 BOT 自动更新，则跳备菜单
+    if [[ "$AUTO_UPDATE_BOT" == "1" ]]; then
+        log_info ">>> 执行云端同步：正在更新守护进程与云端中继..."
+        # 确保关键变量已读
+        if [ -f "$ENV_PATH" ]; then source "$ENV_PATH"; fi
+        setup_guardian_bot
+        deploy_cf_worker
+        exit 0
+    fi
     # 如果是静默模式，根据 INSTALL_MODE 自动执行
     if [[ "$MODE" == "silent" ]]; then
         log_info ">>> 检测到静默安装模式: $INSTALL_MODE"
