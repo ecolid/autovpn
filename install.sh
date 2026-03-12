@@ -1512,21 +1512,22 @@ if [ ! -z "$EXISTING_MODE" ]; then
     read -p "请选择: " choice
 
     case $choice in
-        1) optimize_system; [ "$EXISTING_MODE" == "Reality" ] && install_reality || install_ws_tls ;;
-        2) optimize_system; [ "$EXISTING_MODE" == "Reality" ] && install_ws_tls || install_reality ;;
-        3) show_link ;;
-        4) manage_services ;;
-        5) show_logs ;;
+        1) optimize_system; [ "$EXISTING_MODE" == "Reality" ] && install_reality || install_ws_tls; echo -e "\n${GREEN}操作完成。${PLAIN}"; read -p "按回车键返回菜单..." ;;
+        2) optimize_system; [ "$EXISTING_MODE" == "Reality" ] && install_ws_tls || install_reality; echo -e "\n${GREEN}操作完成。${PLAIN}"; read -p "按回车键返回菜单..." ;;
+        3) show_link; echo ""; read -p "按回车键返回菜单..." ;;
+        4) manage_services; read -p "按回车键返回菜单..." ;;
+        5) show_logs; read -p "按回车键返回菜单..." ;;
         6) 
             echo -e "1. 刷新 WARP IP\n2. 重置 WARP 注册"
             read -p "选项: " wc
             [ "$wc" == "1" ] && manage_warp "refresh" || manage_warp "reset"
+            read -p "按回车键返回菜单..."
             ;;
-        7) open_ports 80; open_ports 443; [ ! -z "$EXISTING_PORT" ] && open_ports $EXISTING_PORT; log_info "防火墙策略已更新。" ;;
-        8) setup_guardian_bot ;;
-        9) uninstall_all ;;
+        7) open_ports 80; open_ports 443; [ ! -z "$EXISTING_PORT" ] && open_ports $EXISTING_PORT; log_info "防火墙策略已更新。"; read -p "按回车键返回菜单..." ;;
+        8) setup_guardian_bot; read -p "按回车键返回菜单..." ;;
+        9) uninstall_all; exit 0 ;;
         0) exit 0 ;;
-        *) log_err "无效输入"; show_menu ;;
+        *) log_err "无效输入"; sleep 1 ;;
     esac
 else
     echo -e "  ${GREEN}1.${PLAIN} 安装 VLESS-Reality (推荐：简单/免域名/高性能)"
@@ -1537,12 +1538,12 @@ else
     echo ""
     read -p "请选择: " choice
     case $choice in
-        1) optimize_system; install_reality ;;
-        2) optimize_system; install_ws_tls ;;
-        3) optimize_system; log_info "系统优化完成。"; read -p "回车返回..." ;;
-        4) setup_guardian_bot ;;
+        1) optimize_system; install_reality; read -p "安装完成。按回车键返回菜单..." ;;
+        2) optimize_system; install_ws_tls; read -p "安装完成。按回车键返回菜单..." ;;
+        3) optimize_system; log_info "系统优化完成。"; read -p "按回车键返回菜单..." ;;
+        4) setup_guardian_bot; read -p "按回车键返回菜单..." ;;
         0) exit 0 ;;
-        *) log_err "无效输入"; show_menu ;;
+        *) log_err "无效输入"; sleep 1 ;;
     esac
 fi
 }
@@ -1569,7 +1570,11 @@ main() {
             exit 0
         fi
     fi
-    show_menu
+
+    # 核心循环：主菜单常驻 (v1.8.3.2)
+    while true; do
+        show_menu
+    done
 }
 
 main
