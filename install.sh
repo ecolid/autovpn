@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.7)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.8)
 # =================================================================
 
-VERSION="v1.8.7"
+VERSION="v1.8.8"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -34,7 +34,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# 辅助：Cloudflare API 调用器 (v1.8.6 - Verbose Error Handling)
+# 辅助：Cloudflare API 调用器 (v1.8.8 - Integrity Shield)
 cf_api() {
     local method="$1"
     local path="$2"
@@ -44,18 +44,32 @@ cf_api() {
     
     local res
     if [[ -z "$body" ]]; then
-        res=$(curl -s -X "$method" "$url" -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json")
+        res=$(curl -s -f -X "$method" "$url" -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" 2>&1)
     else
-        res=$(curl -s -X "$method" "$url" -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" -d "$body")
+        res=$(curl -s -f -X "$method" "$url" -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" -d "$body" 2>&1)
+    fi
+
+    local curl_exit=$?
+    if [[ $curl_exit -ne 0 ]]; then
+        echo -e "${RED}[ERROR] 网络请求物理失败 (Exit: $curl_exit)${NC}" >&2
+        echo -e "${YELLOW}详情: $res${NC}" >&2
+        return 1
+    fi
+
+    # 简单校验 JSON 有效性
+    if ! echo "$res" | jq -e . >/dev/null 2>&1; then
+        echo -e "${RED}[ERROR] 接收到非 JSON 响应!${NC}" >&2
+        echo -e "${YELLOW}原始回显: ${NC}\n$res" >&2
+        return 1
     fi
 
     local success=$(echo "$res" | jq -r '.success')
     if [[ "$success" != "true" ]]; then
-        log_err "Cloudflare API 请求失败!"
-        echo -e "${RED}接口响应: ${NC}"
-        echo "$res" | jq .
+        echo -e "${RED}[ERROR] Cloudflare 业务报错!${NC}" >&2
+        echo "$res" | jq . >&2
         return 1
     fi
+    
     echo "$res"
 }
 
@@ -68,7 +82,7 @@ log_err()  {
 
 # 信号捕获 (Ctrl+C 退出提示)
 cleanup() {
-    echo -e "\n${YELLOW}检测到脚本被中断。配置未完成，你可以随时再次运行脚本继续安装。${PLAIN}"
+    echo -e "\n${YELLOW}检测到脚本被中断。配置未完成，你可以随时再次运行脚本继续安装。"
     exit 0
 }
 trap cleanup SIGINT SIGTERM
@@ -169,7 +183,7 @@ load_config() {
         elif grep -q "\"ws\"" "$CONFIG_PATH"; then
             EXISTING_MODE="WS-TLS"
             EXISTING_UUID=$(jq -r '.inbounds[0].settings.clients[0].id' "$CONFIG_PATH" 2>/dev/null || grep -oP '"id":\s*"[a-f0-9-]{36}"' "$CONFIG_PATH" | head -n1 | grep -oP '[a-f0-9-]{36}' || echo "")
-            EXISTING_PATH=$(jq -r '.inbounds[0].streamSettings.wsSettings.path' "$CONFIG_PATH" 2>/dev/null || grep -oP '"path":\s*"[^"]+"' "$CONFIG_PATH" | head -n1 | grep -oP '"[^"]+"$' | tr -d '"' || echo "")
+            EXISTING_PATH=$(jq -r '.inbounds[0].streamSettings.wsSettings.path' "$CONFIG_PATH" 2>/dev/null || grep -oP '"path":\s*"[^"]+"' "$CONFIG_PATH" | head -n1 | grep -oP '"[^"]+"$' | tr -d '"')
             EXISTING_DOMAIN=$(ls /etc/nginx/sites-available/ 2>/dev/null | grep ".conf" | head -n 1 | sed 's/.conf//' || echo "")
         fi
     fi
@@ -197,6 +211,13 @@ show_link() {
     load_config
     if [ -z "$EXISTING_MODE" ]; then
         log_err "未检测到有效安装，无法生成链接。"
+        read -p "按回车返回..."
+        return
+    fi
+
+    # 检查 Xray 服务状态
+    if ! systemctl is-active --quiet xray; then
+        log_err "Xray 服务未运行，无法生成有效链接。请检查服务状态。"
         read -p "按回车返回..."
         return
     fi
@@ -416,7 +437,7 @@ deploy_cf_worker() {
         echo -e "   - 点击 '创建令牌' -> 使用 '编辑 Cloudflare Workers' 模板。"
         [ ! -z "$CF_API_TOKEN" ] && echo -e "   - 当前记录: ${CYAN}${CF_API_TOKEN:0:6}******${PLAIN}"
         read -p "请输入 Cloudflare API Token: " INPUT_API_TOKEN
-        CF_API_TOKEN="${INPUT_API_TOKEN:-$CF_API_TOKEN}"
+        CF_API_TOKEN="${INPUT_API_TOKEN:-$INPUT_API_TOKEN}" # Fix: Use INPUT_API_TOKEN if CF_API_TOKEN is empty
     fi
     
     if [[ -z "$CF_ACCOUNT_ID" || -z "$CF_API_TOKEN" ]]; then
@@ -432,39 +453,61 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.7.0)..."
-    local d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}') || return 1
-    local d1_id=$(echo "$d1_res" | jq -r '.result.uuid')
-    
-    if [[ "$d1_id" == "null" || -z "$d1_id" ]]; then
+    log_info "正在配置云端 D1 数据库 (v1.8.8)..."
+    local d1_res
+    d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
+    if [[ $? -ne 0 ]]; then
+        log_warn "正尝试获取已有 D1 实例..."
         d1_res=$(cf_api GET "/d1/database") || return 1
         d1_id=$(echo "$d1_res" | jq -r '.result[] | select(.name=="autovpn_db") | .uuid')
+    else
+        d1_id=$(echo "$d1_res" | jq -r '.result.uuid')
     fi
-    [ -z "$d1_id" ] && { log_err "无法获取 D1 ID，请检查 Token 权限。"; return 1; }
+    
+    if [[ -z "$d1_id" || "$d1_id" == "null" ]]; then
+        log_err "关键失败：无法确定 D1 数据库 ID。"
+        return 1
+    fi
     echo "$d1_id" > /usr/local/etc/autovpn/.d1_id
 
-    log_info "正在初始化任务编排 SQL 表结构 (v1.7.0)..."
-    local sql_init="
-        CREATE TABLE IF NOT EXISTS nodes (
-            id TEXT PRIMARY KEY, cpu REAL, mem_pct REAL, v TEXT, t INTEGER, state TEXT DEFAULT 'online',
-            health TEXT DEFAULT '{}', traffic_total TEXT DEFAULT '{}', quality TEXT DEFAULT '{}', ip TEXT,
-            is_selected INTEGER DEFAULT 0, alert_sent INTEGER DEFAULT 0
-        );
-        CREATE TABLE IF NOT EXISTS traffic_snapshots (node_id TEXT, up INTEGER, down INTEGER, t INTEGER);
-        CREATE TABLE IF NOT EXISTS commands (id INTEGER PRIMARY KEY AUTOINCREMENT, target_id TEXT, cmd TEXT, task_id INTEGER, result TEXT, status TEXT DEFAULT 'pending', completed_at INTEGER);
-        CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, val TEXT);
-        INSERT OR REPLACE INTO config (key, val) VALUES ('BOT_TOKEN', '$TG_BOT_TOKEN');
-        INSERT OR REPLACE INTO config (key, val) VALUES ('CHAT_ID', '$TG_CHAT_ID');
-        INSERT OR REPLACE INTO config (key, val) VALUES ('CF_TOKEN', '$CF_API_TOKEN');
-    "
+    # 初始化 D1 Schema (严格模式)
+    log_info "正在初始化任务编排 SQL 表结构..."
+    local sql_init="CREATE TABLE IF NOT EXISTS nodes (id TEXT PRIMARY KEY, cpu REAL, mem_pct REAL, v TEXT, t INTEGER, state TEXT DEFAULT 'online', health TEXT DEFAULT '{}', traffic_total TEXT DEFAULT '{}', quality TEXT DEFAULT '{}', ip TEXT, is_selected INTEGER DEFAULT 0, alert_sent INTEGER DEFAULT 0); CREATE TABLE IF NOT EXISTS traffic_snapshots (node_id TEXT, up INTEGER, down INTEGER, t INTEGER); CREATE TABLE IF NOT EXISTS commands (id INTEGER PRIMARY KEY AUTOINCREMENT, target_id TEXT, cmd TEXT, task_id INTEGER, result TEXT, status TEXT DEFAULT 'pending', completed_at INTEGER); CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, val TEXT); INSERT OR REPLACE INTO config (key, val) VALUES ('BOT_TOKEN', '$TG_BOT_TOKEN'); INSERT OR REPLACE INTO config (key, val) VALUES ('CHAT_ID', '$TG_CHAT_ID'); INSERT OR REPLACE INTO config (key, val) VALUES ('CF_TOKEN', '$CF_API_TOKEN');"
     local payload=$(jq -n --arg sql "$sql_init" '{"sql": $sql}')
     cf_api POST "/d1/database/${d1_id}/query" "$payload" > /dev/null || return 1
 
-    # 部署 Worker (带 D1 绑定)
+    # 部署 Worker (带 D1 绑定 - 严格模式)
     log_info "正在上传并绑定 Worker 脚本..."
-    cat > /tmp/worker.js <<'EOF_JS'
+    local worker_js=$(cat /tmp/worker.js | sed "s/your_private_token_here/${CLUSTER_TOKEN}/g")
+    
+    cat > /tmp/metadata.json <<EOF
+{
+  "main_module": "index.js",
+  "bindings": [
+    { "type": "d1", "name": "DB", "id": "$d1_id" }
+  ]
+}
+EOF
+    # 使用 cf_api 封装上传 (PUT 脚本)
+    # 注意：Worker 上传接口比较特殊，需要 multipart 格式，cf_api 目前只支持 JSON
+    # 临时改用 curl 直连，但必须严格检查退出码
+    local upload_res=$(curl -s -f -X PUT "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/autovpn-relay" \
+        -H "Authorization: Bearer ${CF_API_TOKEN}" \
+        -F "metadata=@/tmp/metadata.json;type=application/json" \
+        -F "index.js=$worker_js;type=application/javascript+module" 2>&1)
+    
+    if [[ $? -ne 0 ]]; then
+        log_err "Worker 脚本上传物理失败!"
+        echo -e "${YELLOW}详情: $upload_res${NC}"
+        return 1
+    fi
+
+    # 激活 workers.dev 路由
+    log_info "正在发布 Worker 到 workers.dev 子域名..."
+    cf_api POST "/workers/scripts/autovpn-relay/subdomain" '{"enabled": true}' > /dev/null || return 1
+cat > /tmp/worker.js <<'EOF_JS'
 /**
- * Cloudflare Worker for AutoVPN Guardian Cluster (v1.8.7 - Guided Setup)
+ * Cloudflare Worker for AutoVPN Guardian Cluster (v1.8.8 - Integrity Shield)
  * Orchestrates: Inter-node Rescue, Interactive Deployment Wizard, Bulk Updates.
  */
 
