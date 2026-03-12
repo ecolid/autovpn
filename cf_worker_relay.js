@@ -161,7 +161,8 @@ async function handleTelegramUpdate(update, env) {
             }
         } else {
             // 如果没在等待输入，则开启一个以该 IP 为准的新向导
-            const data = JSON.stringify({ ip: p.ip, mode: p.mode, uuid: p.uuid, port: p.port, domain: p.domain, cft: "" });
+            const defaultCft = await getConfig(env, "CF_TOKEN") || "";
+            const data = JSON.stringify({ ip: p.ip, mode: p.mode, uuid: p.uuid, port: p.port, domain: p.domain, cft: defaultCft });
             await env.DB.prepare("INSERT OR REPLACE INTO config (key, val) VALUES (?, ?)").bind(`wiz_${p.ip}`, data).run();
             await sendTelegram(BOT_TOKEN, CHAT_ID, `🔗 <b>发现订阅链接:</b> <code>${p.ip}</code>\n已自动提取参数并开启部署预览:`);
             return await showWizardPreview(env, p.ip, BOT_TOKEN, CHAT_ID);
@@ -181,7 +182,8 @@ async function handleTelegramUpdate(update, env) {
     if (cbData?.startsWith("wiz_mod_")) {
         const [_, __, ip, mode] = cbData.split("_");
         const uuid = self.crypto.randomUUID();
-        const data = JSON.stringify({ ip, mode, uuid, port: 443, domain: mode === 'ws' ? "example.com" : "", cft: "" });
+        const defaultCft = await getConfig(env, "CF_TOKEN") || "";
+        const data = JSON.stringify({ ip, mode, uuid, port: 443, domain: mode === 'ws' ? "example.com" : "", cft: defaultCft });
         await env.DB.prepare("INSERT OR REPLACE INTO config (key, val) VALUES (?, ?)").bind(`wiz_${ip}`, data).run();
         await showWizardPreview(env, ip, BOT_TOKEN, CHAT_ID, update.callback_query.message.message_id);
     }

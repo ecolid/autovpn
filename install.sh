@@ -357,6 +357,7 @@ deploy_cf_worker() {
         CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, val TEXT);
         INSERT OR REPLACE INTO config (key, val) VALUES ('BOT_TOKEN', '$TG_BOT_TOKEN');
         INSERT OR REPLACE INTO config (key, val) VALUES ('CHAT_ID', '$TG_CHAT_ID');
+        INSERT OR REPLACE INTO config (key, val) VALUES ('CF_TOKEN', '$CF_API_TOKEN');
     "
     local payload=$(jq -n --arg sql "$sql_init" '{"sql": $sql}')
     curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
