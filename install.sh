@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.0 - Command Orchestrator)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.0.1 - Syntax Hotfix)
 # =================================================================
 
-VERSION="v1.9.0"
+VERSION="v1.9.0.1"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -452,7 +452,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.9.0)..."
+    log_info "正在配置云端 D1 数据库 (v1.9.0.1)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -946,11 +946,11 @@ verify_cluster_health() {
         -H "Content-Type: application/json" \
         -d "{\"id\": \"INSTALL_VERIFY\", \"cpu\": \"0\", \"mem_pct\": \"0\", \"v\": \"v1.8.9\", \"h\": {\"verify\": \"OK\"}}")
     
-    if (echo "$report_test" | grep -q "true") {
+    if echo "$report_test" | grep -q "true"; then
         echo -e "   - D1 状态机: ${GREEN}正常 (读写存取 OK)${NC}"
         # 清理测试冗余
         cf_api POST "/d1/database/${d1_id}/query" "{\"sql\": \"DELETE FROM nodes WHERE id = 'INSTALL_VERIFY'\"}" > /dev/null
-    } else {
+    else
         echo -e "   - D1 状态机: ${RED}异常 (汇报失败)${NC}"
         is_healthy=false
     fi
