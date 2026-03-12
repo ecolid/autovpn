@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.9.5)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.9.6)
 # =================================================================
 
-VERSION="v1.8.9.5"
+VERSION="v1.8.9.6"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -452,7 +452,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.8.9.5)..."
+    log_info "正在配置云端 D1 数据库 (v1.8.9.6)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -790,6 +790,13 @@ function parseVless(link) {
         let mode = params.get('type') === 'ws' ? 'ws' : 'reality';
         return { uuid, ip: host, port: parseInt(port), mode, domain: params.get('sni') || "" };
     } catch (e) { return null; }
+}
+async function sendTelegram(t, c, text, rm, eid) {
+    const url = `https://api.telegram.org/bot${t}/${eid ? 'editMessageText' : 'sendMessage'}`;
+    const b = { chat_id: c, text, parse_mode: "HTML" };
+    if (eid) b.message_id = eid;
+    if (rm) b.reply_markup = rm;
+    await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
 }
 EOF_JS
     # 准备 Worker 上传 (v1.8.9.4: 标准化模块路径)
