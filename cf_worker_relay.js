@@ -101,18 +101,31 @@ async function handleTelegramUpdate(update, env) {
     const text = update.message ? update.message.text : null;
     const cbData = update.callback_query ? update.callback_query.data : null;
 
+    // 0. Main Menu (/start)
+    if (text === "/start" || cbData === "show_main") {
+        const welcome = "🎮 <b>AutoVPN 集群控制台 (v1.8.3)</b>\n\n请选择操作模块:";
+        const btns = [
+            [{ text: "📊 状态看板", callback_data: "show_status" }, { text: "📈 数据罗盘", callback_data: "show_stats" }],
+            [{ text: "🛡️ 安全中心", callback_data: "show_security" }],
+            [{ text: "⚙️ 向导说明", url: "https://github.com/ecolid/autovpn" }]
+        ];
+        await sendTelegram(BOT_TOKEN, CHAT_ID, welcome, { inline_keyboard: btns }, update.callback_query?.message.message_id);
+    }
+
     // 1. Status Board
     if (text === "/status" || cbData === "show_status") {
         const nodes = await env.DB.prepare("SELECT * FROM nodes ORDER BY t DESC").all();
         let selectedCount = 0;
-        let res = "📊 <b>集群实时看板 (v1.8.3)</b>\n";
+        let res = "�️ <b>节点实时状态 (v1.8.3)</b>\n";
         const btns = [];
         for (const s of nodes.results) {
             const st = s.state === 'online' ? "🟢" : "🔴";
-            const sel = s.is_selected ? " [✅ 已选]" : "";
+            const isV183 = s.v && s.v.includes("1.8.3");
+            const shield = isV183 ? "🛡️" : "";
+            const sel = s.is_selected ? " [✅]" : "";
             if (s.is_selected) selectedCount++;
 
-            res += `<b>${s.id}</b> [${st}]${sel}\n`;
+            res += `<b>${s.id}</b> [${st}] ${shield}${sel}\n`;
             res += `├ IP: <code>${s.ip}</code> | v${s.v}\n`;
             res += `└ 负荷: ${genBar(s.cpu)}\n\n`;
 
@@ -122,7 +135,7 @@ async function handleTelegramUpdate(update, env) {
             ]);
         }
 
-        let bottomBtns = [{ text: "🔄 刷新数据", callback_data: "show_status" }];
+        let bottomBtns = [{ text: "🔄 刷新", callback_data: "show_status" }, { text: "🔙 返回", callback_data: "show_main" }];
         if (selectedCount > 0) {
             res += `\n📦 <b>当前已勾选 <code>${selectedCount}</code> 台设备</b>`;
             bottomBtns.unshift({ text: `🚀 批量升级 (${selectedCount})`, callback_data: "bulk_up" });
@@ -141,7 +154,7 @@ async function handleTelegramUpdate(update, env) {
     // 2. Data Stats Board (v1.8.0)
     if (text === "/stats" || cbData === "show_stats") {
         const nodes = await env.DB.prepare("SELECT * FROM nodes ORDER BY t DESC").all();
-        let report = "📊 <b>AutoVPN 数据罗盘 (v1.8.0)</b>\n\n";
+        let report = "� <b>数据罗盘监测 (v1.8.3)</b>\n\n";
 
         for (const s of nodes.results) {
             let t = { up: 0, down: 0 }, q = { china: { lat: 0, jit: 0, loss: 0 } };
@@ -152,13 +165,44 @@ async function handleTelegramUpdate(update, env) {
             const downGB = (t.down / (1024 ** 3)).toFixed(2);
             const lossIcon = q.china?.loss > 5 ? "⚠️" : "✅";
 
-            report += `🖥 <b>${s.id}</b>\n`;
-            report += `├ 流量: 🔼 ${upGB}GB | 🔽 ${downGB}GB\n`;
+            report += `🌩️ <b>${s.id}</b>\n`;
+            report += `├ 流量: 🔼 ${upGB}G | 🔽 ${downGB}G\n`;
             report += `└ 线路: 📶 ${q.china?.lat || 0}ms | ⏳ ${q.china?.jit || 0}ms | ${lossIcon} ${q.china?.loss || 0}%\n\n`;
         }
 
-        const btns = [[{ text: "🔄 刷新统计", callback_data: "show_stats" }]];
+        const btns = [[{ text: "🔄 刷新", callback_data: "show_stats" }, { text: "🔙 返回", callback_data: "show_main" }]];
         await sendTelegram(BOT_TOKEN, CHAT_ID, report, { inline_keyboard: btns }, update.callback_query?.message.message_id);
+    }
+
+    // 3. Security Command Center (v1.8.3)
+    if (text === "/ssh" || cbData === "show_security") {
+        const pub = await getConfig(env, "SSH_PUB");
+        const owner = await getConfig(env, "SSH_OWNER_PUB");
+        let info = "🛡️ <b>集群安全指挥中心 (v1.8.3)</b>\n\n";
+
+        info += "👤 <b>老板 DNA (Owner Key):</b>\n";
+        info += owner ? `<code>${owner.substring(0, 40)}...</code>\n` : "<i>(尚未提取)</i>\n";
+        info += "💡 <i>状态：已在全集群自动同步。</i>\n\n";
+
+        info += "🤖 <b>机器人锁芯 (Cluster Key):</b>\n";
+        info += pub ? `<code>${pub.substring(0, 40)}...</code>\n` : "<i>(尚未生成)</i>\n";
+        info += "💡 <i>状态：用于节点互救与远程部署。</i>\n\n";
+
+        info += "⚠️ <b>注意：</b> 如果你怀疑密钥泄露，请点击下方轮换按钮。";
+
+        const btns = [
+            [{ text: "🔄 轮换机器人密钥 (Zero-Downtime)", callback_data: "rotate_ssh" }],
+            [{ text: "🔙 返回主菜单", callback_data: "show_main" }]
+        ];
+        await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns }, update.callback_query?.message.message_id);
+    }
+
+    if (cbData === "rotate_ssh") {
+        const doc = await env.DB.prepare("SELECT id FROM nodes WHERE state = 'online' ORDER BY t DESC LIMIT 1").first();
+        if (!doc) return await sendTelegram(BOT_TOKEN, CHAT_ID, "❌ 错误: 无在线医生节点可执行轮换");
+
+        await env.DB.prepare("INSERT INTO commands (target_id, cmd, task_id) VALUES (?, ?, ?)").bind(doc.id, "--rotate-keys", Date.now()).run();
+        await sendTelegram(BOT_TOKEN, CHAT_ID, `🔀 <b>密钥轮换任务已发派</b>\n执行官员: ${doc.id}\n正在进行“三步走”无缝切换...`);
     }
 
     // 3. Rescue logic
