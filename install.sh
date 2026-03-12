@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-set -e
 
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.5)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.6)
 # =================================================================
 
-VERSION="v1.8.5"
+VERSION="v1.8.6"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -35,9 +34,37 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-log_info() { echo -e "${GREEN}[INFO] $1${PLAIN}"; }
-log_warn() { echo -e "${YELLOW}[WARN] $1${PLAIN}"; }
-log_err()  { echo -e "${RED}[ERROR] $1${PLAIN}"; }
+# 辅助：Cloudflare API 调用器 (v1.8.6 - Verbose Error Handling)
+cf_api() {
+    local method="$1"
+    local path="$2"
+    shift 2
+    local body="$@"
+    local url="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}${path}"
+    
+    local res
+    if [[ -z "$body" ]]; then
+        res=$(curl -s -X "$method" "$url" -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json")
+    else
+        res=$(curl -s -X "$method" "$url" -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" -d "$body")
+    fi
+
+    local success=$(echo "$res" | jq -r '.success')
+    if [[ "$success" != "true" ]]; then
+        log_err "Cloudflare API 请求失败!"
+        echo -e "${RED}接口响应: ${NC}"
+        echo "$res" | jq .
+        return 1
+    fi
+    echo "$res"
+}
+
+log_info() {
+ echo -e "${GREEN}[INFO] $1${PLAIN}"; }
+log_warn() {
+ echo -e "${YELLOW}[WARN] $1${PLAIN}"; }
+log_err()  {
+ echo -e "${RED}[ERROR] $1${PLAIN}"; }
 
 # 信号捕获 (Ctrl+C 退出提示)
 cleanup() {
@@ -406,14 +433,12 @@ deploy_cf_worker() {
     fi
 
     log_info "正在配置云端 D1 数据库 (v1.7.0)..."
-    local d1_res=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database" \
-        -H "Authorization: Bearer ${CF_API_TOKEN}" \
-        -H "Content-Type: application/json" \
-        -d '{"name": "autovpn_db"}')
+    local d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}') || return 1
     local d1_id=$(echo "$d1_res" | jq -r '.result.uuid')
+    
     if [[ "$d1_id" == "null" || -z "$d1_id" ]]; then
-        d1_id=$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database" \
-            -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result[] | select(.name=="autovpn_db") | .uuid')
+        d1_res=$(cf_api GET "/d1/database") || return 1
+        d1_id=$(echo "$d1_res" | jq -r '.result[] | select(.name=="autovpn_db") | .uuid')
     fi
     [ -z "$d1_id" ] && { log_err "无法获取 D1 ID，请检查 Token 权限。"; return 1; }
     echo "$d1_id" > /usr/local/etc/autovpn/.d1_id
@@ -421,18 +446,9 @@ deploy_cf_worker() {
     log_info "正在初始化任务编排 SQL 表结构 (v1.7.0)..."
     local sql_init="
         CREATE TABLE IF NOT EXISTS nodes (
-            id TEXT PRIMARY KEY, 
-            cpu REAL, 
-            mem_pct REAL, 
-            v TEXT, 
-            t INTEGER, 
-            state TEXT DEFAULT 'online',
-            health TEXT DEFAULT '{}',
-            traffic_total TEXT DEFAULT '{}',
-            quality TEXT DEFAULT '{}',
-            ip TEXT,
-            is_selected INTEGER DEFAULT 0, 
-            alert_sent INTEGER DEFAULT 0
+            id TEXT PRIMARY KEY, cpu REAL, mem_pct REAL, v TEXT, t INTEGER, state TEXT DEFAULT 'online',
+            health TEXT DEFAULT '{}', traffic_total TEXT DEFAULT '{}', quality TEXT DEFAULT '{}', ip TEXT,
+            is_selected INTEGER DEFAULT 0, alert_sent INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS traffic_snapshots (node_id TEXT, up INTEGER, down INTEGER, t INTEGER);
         CREATE TABLE IF NOT EXISTS commands (id INTEGER PRIMARY KEY AUTOINCREMENT, target_id TEXT, cmd TEXT, task_id INTEGER, result TEXT, status TEXT DEFAULT 'pending', completed_at INTEGER);
@@ -442,16 +458,13 @@ deploy_cf_worker() {
         INSERT OR REPLACE INTO config (key, val) VALUES ('CF_TOKEN', '$CF_API_TOKEN');
     "
     local payload=$(jq -n --arg sql "$sql_init" '{"sql": $sql}')
-    curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
-        -H "Authorization: Bearer ${CF_API_TOKEN}" \
-        -H "Content-Type: application/json" \
-        -d "$payload" > /dev/null
+    cf_api POST "/d1/database/${d1_id}/query" "$payload" > /dev/null || return 1
 
     # 部署 Worker (带 D1 绑定)
     log_info "正在上传并绑定 Worker 脚本..."
     cat > /tmp/worker.js <<'EOF_JS'
 /**
- * Cloudflare Worker for AutoVPN Guardian Cluster (v1.8.5 - Self-Evolution)
+ * Cloudflare Worker for AutoVPN Guardian Cluster
  * Orchestrates: Inter-node Rescue, Interactive Deployment Wizard, Bulk Updates.
  */
 
@@ -518,7 +531,7 @@ export default {
 
             return new Response(JSON.stringify({ ok: true }));
         }
-        return new Response("AutoVPN Orchestrator v1.8.3 Online", { status: 200 });
+        return new Response("AutoVPN Orchestrator Online", { status: 200 });
     },
 
     async scheduled(event, env) {
@@ -553,7 +566,7 @@ async function handleTelegramUpdate(update, env) {
     const cbData = update.callback_query ? update.callback_query.data : null;
 
     if (text === "/start" || cbData === "show_main") {
-        const welcome = "🎮 <b>AutoVPN 集群控制台 (v1.8.3)</b>\n\n请选择操作模块:";
+        const welcome = "🎮 <b>AutoVPN 集群控制台</b>\n\n请选择操作模块:";
         const btns = [
             [{ text: "📊 状态看板", callback_data: "show_status" }, { text: "📈 数据罗盘", callback_data: "show_stats" }],
             [{ text: "🛡️ 安全中心", callback_data: "show_security" }],
@@ -565,15 +578,13 @@ async function handleTelegramUpdate(update, env) {
     if (text === "/status" || cbData === "show_status") {
         const nodes = await env.DB.prepare("SELECT * FROM nodes ORDER BY t DESC").all();
         let selectedCount = 0;
-        let res = "🖥️ <b>节点实时状态 (v1.8.3)</b>\n";
+        let res = "🖥️ <b>节点实时状态</b>\n";
         const btns = [];
         for (const s of nodes.results) {
             const st = s.state === 'online' ? "🟢" : "🔴";
-            const isV183 = s.v && s.v.includes("1.8.3");
-            const shield = isV183 ? "🛡️" : "";
             const sel = s.is_selected ? " [✅]" : "";
             if (s.is_selected) selectedCount++;
-            res += `<b>${s.id}</b> [${st}] ${shield}${sel}\n`;
+            res += `<b>${s.id}</b> [${st}] ${sel}\n`;
             res += `├ IP: <code>${s.ip}</code> | v${s.v}\n`;
             res += `└ 负荷: ${genBar(s.cpu)}\n\n`;
             btns.push([
