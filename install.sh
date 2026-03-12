@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.10.0 - Sensor Calibration)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.11.0 - Command Dispatcher)
 # =================================================================
 
-VERSION="v1.10.0"
+VERSION="v1.11.0"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -15,7 +15,7 @@ CYAN='\033[0;36m'
 PLAIN='\033[0m'
 NC='\033[0m'
 
-# 解析命令行参数 (v1.7.0)
+# 解析命令行参数 (v1.11.0)
 while [[ $# -gt 0 ]]; do
     case $1 in
         --silent) MODE="silent"; shift ;;
@@ -23,15 +23,33 @@ while [[ $# -gt 0 ]]; do
         --port) XRAY_PORT="$2"; shift 2 ;;
         --domain) DOMAIN="$2"; shift 2 ;;
         --cf-token) CF_TOKEN="$2"; shift 2 ;;
-        --mode) INSTALL_MODE="$2"; shift 2 ;; # 明确指定安装模式 (reality/ws)
+        --mode) INSTALL_MODE="$2"; shift 2 ;; 
         --rotate-keys) ROTATE_KEYS=1; shift ;;
         --update-bot)
             ENV_PATH="/usr/local/etc/autovpn/.env"
             if [ -f "$ENV_PATH" ]; then source "$ENV_PATH"; fi
             AUTO_UPDATE_BOT=1; shift ;;
+        start|stop|restart|log|speed) CMD_ACTION="$1"; shift ;;
         *) shift ;;
     esac
 done
+
+# 如果有动作指令，直接执行并退出
+if [ ! -z "$CMD_ACTION" ]; then
+    case $CMD_ACTION in
+        start) systemctl start xray ;;
+        stop) systemctl stop xray ;;
+        restart) systemctl restart xray ;;
+        log) journalctl -u xray --no-pager -n 50 ;;
+        speed) 
+            if ! command -v speedtest-cli &> /dev/null; then
+                apt-get update && apt-get install -y speedtest-cli
+            fi
+            speedtest-cli --simple
+            ;;
+    esac
+    exit 0
+fi
 
 # 辅助：Cloudflare API 调用器 (v1.8.9 - Vision Patch)
 cf_api() {
@@ -459,7 +477,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.10.0)..."
+    log_info "正在配置云端 D1 数据库 (v1.11.0)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -1173,11 +1191,11 @@ setup_guardian_bot() {
         fi
     fi
 
-    # 创建驱动脚本 (v1.10.0 - Sensor Calibration)
+    # 创建驱动脚本 (v1.11.0 - Command Dispatcher)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, statistics, sys, socket
 
-VERSION = "1.10.0"
+VERSION = "1.11.0"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
 
@@ -1301,8 +1319,8 @@ EOF
     systemctl daemon-reload
     systemctl enable autovpn-guardian && systemctl restart autovpn-guardian
     
-    # [v1.9.7] 关键路径修复：建立全局软链接
-    ln -sf /usr/local/etc/autovpn/install.sh /usr/local/bin/autovpn
+    # [Standard] 建立全局软链接 (修正版本)
+    ln -sf "$(readlink -f "$0")" /usr/local/bin/autovpn
     chmod +x /usr/local/bin/autovpn
     
     log_info "✅ Guardian 集群服务与全局指令已刷新"
