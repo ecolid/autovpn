@@ -722,8 +722,12 @@ EOF
     curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/setWebhook" \
         -d "url=https://autovpn-relay.${subdomain}.workers.dev/webhook" > /dev/null
 
+    # 获取 Bot 用户名并展示链接
+    local bot_username=$(curl -s "https://api.telegram.org/bot${TG_BOT_TOKEN}/getMe" | jq -r '.result.username')
+    
     log_info "✅ D1 状态机监控中心已激活！"
     echo -e "Cluster Mode: ${CYAN}D1 StatusMachine (v1.8.3)${NC}"
+    echo -e "Telegram Bot: ${GREEN}https://t.me/${bot_username}${NC}"
     return 0
 }
 
