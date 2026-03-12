@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.9 - Voice Restoration)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.10.0 - Sensor Calibration)
 # =================================================================
 
-VERSION="v1.9.9"
+VERSION="v1.10.0"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -459,7 +459,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.9.9)..."
+    log_info "正在配置云端 D1 数据库 (v1.10.0)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -1173,11 +1173,11 @@ setup_guardian_bot() {
         fi
     fi
 
-    # 创建驱动脚本 (v1.9.9 - Voice Restoration)
+    # 创建驱动脚本 (v1.10.0 - Sensor Calibration)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, statistics, sys, socket
 
-VERSION = "1.9.9"
+VERSION = "1.10.0"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
 
@@ -1220,9 +1220,13 @@ def check_health():
     health = {"xray": "OK", "nginx": "OK", "net": "OK", "warp": "SKIP"}
     if os.system("systemctl is-active --quiet xray") != 0: health["xray"] = "FAIL"
     if os.system("systemctl is-active --quiet nginx") != 0: health["nginx"] = "FAIL"
-    if os.path.exists("/usr/local/bin/warp"):
-        warp_res = subprocess.getoutput("warp status")
+    # [v1.10.0] 对齐 VPS 本地检测逻辑：通过 systemctl 判断 WARP 存在
+    if os.system("systemctl is-active --quiet warp-svc") == 0:
+        warp_res = subprocess.getoutput("warp-cli status")
         health["warp"] = "OK" if "Connected" in warp_res else "FAIL"
+    elif os.system("command -v warp-cli > /dev/null") == 0:
+        # 如果服务没起，但命令在，也标记为 FAIL 而非 SKIP
+        health["warp"] = "FAIL"
     return health
 
 def get_status_data(tid=None, res=None):
