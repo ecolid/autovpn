@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.0.1 - Syntax Hotfix)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.0.2 - Critical Fix)
 # =================================================================
 
-VERSION="v1.9.0.1"
+VERSION="v1.9.0.2"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -452,7 +452,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.9.0.1)..."
+    log_info "正在配置云端 D1 数据库 (v1.9.0.2)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -1443,6 +1443,7 @@ EOF
 # 3. VLESS-WS-TLS + CDN 部署模块
 # =================================================================
 install_ws_tls() {
+    local XRAY_LISTEN_PORT=10000
     log_info ">>> 配置 VLESS-WS-TLS (CDN/强伪装)..."
     echo -e "${YELLOW}提示: 此模式需要你已将域名托管到 Cloudflare。适合在极端网络坏境下使用。${PLAIN}"
     
