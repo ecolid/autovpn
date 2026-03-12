@@ -1,5 +1,5 @@
 /**
- * Cloudflare Worker for AutoVPN Guardian Cluster (v1.7.0 - Final Sentinel Edition)
+ * Cloudflare Worker for AutoVPN Guardian Cluster (v1.8.1 - Stable Data Compass)
  * Orchestrates: Inter-node Rescue, Interactive Deployment Wizard, Bulk Updates.
  */
 
@@ -67,7 +67,7 @@ export default {
 
             return new Response(JSON.stringify({ ok: true }));
         }
-        return new Response("AutoVPN Orchestrator v1.7.0 Online", { status: 200 });
+        return new Response("AutoVPN Orchestrator v1.8.1 Online", { status: 200 });
     },
 
     async scheduled(event, env) {
@@ -105,7 +105,7 @@ async function handleTelegramUpdate(update, env) {
     if (text === "/status" || cbData === "show_status") {
         const nodes = await env.DB.prepare("SELECT * FROM nodes ORDER BY t DESC").all();
         let selectedCount = 0;
-        let res = "📊 <b>集群实时看板 (v1.7.0)</b>\n";
+        let res = "📊 <b>集群实时看板 (v1.8.1)</b>\n";
         const btns = [];
         for (const s of nodes.results) {
             const st = s.state === 'online' ? "🟢" : "🔴";
@@ -129,6 +129,13 @@ async function handleTelegramUpdate(update, env) {
         }
         btns.push(bottomBtns);
         await sendTelegram(BOT_TOKEN, CHAT_ID, res, { inline_keyboard: btns }, update.callback_query?.message.message_id);
+    }
+
+    // 2. Selection Toggle (v1.7.0b Legacy)
+    if (cbData?.startsWith("chk_")) {
+        const nodeId = cbData.split("_")[1];
+        await env.DB.prepare("UPDATE nodes SET is_selected = 1 - is_selected WHERE id = ?").bind(nodeId).run();
+        return await handleTelegramUpdate({ callback_query: { data: "show_status", message: msg } }, env);
     }
 
     // 2. Data Stats Board (v1.8.0)

@@ -390,7 +390,7 @@ EOF
         -d "url=https://autovpn-relay.$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/subdomain" -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result.subdomain').workers.dev/webhook" > /dev/null
 
     log_info "✅ D1 状态机监控中心已激活！"
-    echo -e "Cluster Mode: ${CYAN}D1 StatusMachine (v1.7.0)${NC}"
+    echo -e "Cluster Mode: ${CYAN}D1 StatusMachine (v1.8.1)${NC}"
     return 0
 }
 
@@ -486,13 +486,20 @@ setup_guardian_bot() {
         fi
     fi
 
-    # 创建驱动脚本 (v1.7.0 - High-Freq StateAgent)
+    # 创建驱动脚本 (v1.8.1 - Data Compass + Sentinel)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, sys, socket, statistics
 
-VERSION = "v1.8.0"
+VERSION = "v1.8.1"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
+
+# [Sentinel] 救援回执模式 - 由 SSH 远程触发
+if "--rescue-worker" in sys.argv:
+    os.system("pkill -9 -f guardian.py")
+    os.system("systemctl restart xray")
+    os.system("systemctl restart autovpn-guardian")
+    sys.exit(0)
 
 def run_shell(cmd):
     try: return subprocess.getoutput(cmd)
@@ -523,9 +530,12 @@ def measure_quality(target):
     except: return {"lat": 0, "jit": 0, "loss": 100}
 
 def check_health():
-    health = {"xray": "OK", "nginx": "OK", "net": "OK"}
+    health = {"xray": "OK", "nginx": "OK", "net": "OK", "warp": "SKIP"}
     if os.system("systemctl is-active --quiet xray") != 0: health["xray"] = "FAIL"
     if os.system("systemctl is-active --quiet nginx") != 0: health["nginx"] = "FAIL"
+    if os.path.exists("/usr/local/bin/warp"):
+        warp_res = subprocess.getoutput("warp status")
+        health["warp"] = "OK" if "Connected" in warp_res else "FAIL"
     return health
 
 def get_status_data(tid=None, res=None):
@@ -560,7 +570,7 @@ def main():
                         target_ip = task["cmd"].split("_")[1]
                         key_path = "/usr/local/etc/autovpn/cluster_key"
                         ssh_cmd = f"ssh -i {key_path} -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@{target_ip} exit"
-                        res = "✅ 成功" if os.system(ssh_cmd) == 0 else "❌ 失败"
+                        res = "✅ 成功" if os.system(ssh_cmd) == 0 else f"❌ 失败: {target_ip}"
                     else:
                         res = run_shell(f"bash /usr/local/bin/autovpn {task['cmd']}")
                     requests.post(f"{cf_url}/report", json=get_status_data(tid=task['task_id'], res=res), 
