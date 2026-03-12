@@ -309,6 +309,17 @@ deploy_cf_worker() {
     echo -e "\n${CYAN}--- Cloudflare Worker 自动化部署 ---${NC}"
     echo -e "说明：此操作将自动在你的 CF 账户创建 D1 数据库并部署中继脚本。"
     
+    if [[ -z "$TG_BOT_TOKEN" || -z "$TG_CHAT_ID" ]]; then
+        echo -e "\n${YELLOW}【重要】检测到尚未配置 Telegram 机器人。${PLAIN}"
+        echo -e "说明：集群模式必须依赖机器人进行消息中继和指令下发。"
+        config_tg_bot
+        # 再次检查
+        if [[ -z "$TG_BOT_TOKEN" || -z "$TG_CHAT_ID" ]]; then
+            log_err "未配置机器人，无法启动集群模式。"
+            return 1
+        fi
+    fi
+
     if [[ -z "$CF_ACCOUNT_ID" ]]; then
         echo -e "\n${CYAN}获取 Account ID:${PLAIN}"
         echo -e "   - 登录 Cloudflare 官网 (dash.cloudflare.com)。"
