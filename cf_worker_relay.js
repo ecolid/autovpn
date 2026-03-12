@@ -170,11 +170,12 @@ async function handleTelegramUpdate(update, env) {
 
     if (text?.match(/^\d+\.\d+\.\d+\.\d+$/)) {
         const ip = text;
+        const info = `🚀 <b>触发远程扩容:</b> <code>${ip}</code>\n\n请选择部署模板:\n\n💎 <b>Reality</b>: 极致性能，免域名，TCP 原生速度。\n☁️ <b>WS-TLS</b>: 强力抗封锁，支持 CDN 转发，需域名。`;
         const btns = [
             [{ text: "💎 Reality 专线", callback_data: `wiz_mod_${ip}_reality` }],
             [{ text: "☁️ WS-TLS (CDN)", callback_data: `wiz_mod_${ip}_ws` }]
         ];
-        await sendTelegram(BOT_TOKEN, CHAT_ID, `🚀 <b>触发远程扩容:</b> <code>${ip}</code>\n请选择部署模板:`, { inline_keyboard: btns });
+        await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns });
     }
 
     if (cbData?.startsWith("wiz_mod_")) {
@@ -187,8 +188,17 @@ async function handleTelegramUpdate(update, env) {
 
     if (cbData?.startsWith("wiz_edit_")) {
         const [_, __, ip, field] = cbData.split("_");
-        const fieldName = (field === 'cft') ? "Cloudflare Token" : field.toUpperCase();
-        await sendTelegram(BOT_TOKEN, CHAT_ID, `⌨️ 请输入新的 <b>${fieldName}</b> 值:`);
+        let prompt = "";
+        if (field === 'cft') {
+            prompt = `⌨️ 请输入新的 <b>Cloudflare Token</b>:\n\n💡 提示: 用于自动化 DNS 解析。请前往 [CF 令牌页](https://dash.cloudflare.com/profile/api-tokens) 创建一个具有 '区域-DNS-编辑' 权限的令牌。`;
+        } else if (field === 'port') {
+            prompt = `⌨️ 请输入新的 <b>端口 (Port)</b>:\n\n💡 提示: 默认为 443。如果你的 443 端口被占用，可以改为 10000-65535 之间的数字。`;
+        } else if (field === 'domain') {
+            prompt = `⌨️ 请输入新的 <b>域名 (Domain)</b>:\n\n💡 提示: 必须是你在 Cloudflare 托管且已解析到该 VPS IP 的域名。`;
+        } else {
+            prompt = `⌨️ 请输入新的 <b>${field.toUpperCase()}</b> 值:`;
+        }
+        await sendTelegram(BOT_TOKEN, CHAT_ID, prompt);
         await env.DB.prepare("INSERT OR REPLACE INTO config (key, val) VALUES (?, ?)").bind(`waiting_input`, `${ip}_${field}`).run();
     }
 

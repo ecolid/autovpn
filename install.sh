@@ -262,12 +262,19 @@ send_tg_msg() {
 # 辅助：配置 TG 机器人
 config_tg_bot() {
     echo -e "\n${BLUE}==================== Telegram 机器人配置 ====================${PLAIN}"
-    echo -e "说明：开启后，脚本将在安装完成、IP 变更或每日巡检时给你发通知。"
+    echo -e "说明：开启后，脚本将在安装完成、故障预警或远程扩容时实时给你发通知。"
     read -p "是否配置 Telegram 机器人通知？ [y/N]: " setup_tg
     if [[ "$setup_tg" =~ ^[Yy]$ ]]; then
-        read -p "请输入 Bot Token (从 @BotFather 获取): " INPUT_TOKEN
+        echo -e "\n${CYAN}1. 获取 Bot Token:${PLAIN}"
+        echo -e "   - 在 Telegram 中搜索 ${YELLOW}@BotFather${PLAIN} 并发送 /newbot。"
+        echo -e "   - 按照提示创建机器人后，你会得到一串类似 '123456:ABC-DEF' 的字符。"
+        read -p "请输入 Bot Token: " INPUT_TOKEN
         TG_BOT_TOKEN="${INPUT_TOKEN:-$TG_BOT_TOKEN}"
-        read -p "请输入 Chat ID (从 @userinfobot 获取): " INPUT_ID
+
+        echo -e "\n${CYAN}2. 获取 Chat ID:${PLAIN}"
+        echo -e "   - 在 Telegram 中搜索 ${YELLOW}@userinfobot${PLAIN} 并发送 /start。"
+        echo -e "   - 该机器人会回复你的数字 ID (如: 987654321)。"
+        read -p "请输入 Chat ID: " INPUT_ID
         TG_CHAT_ID="${INPUT_ID:-$TG_CHAT_ID}"
         
         if [ ! -z "$TG_BOT_TOKEN" ] && [ ! -z "$TG_CHAT_ID" ]; then
@@ -299,12 +306,20 @@ EOF
 # 辅助：一键部署 Cloudflare Worker
 deploy_cf_worker() {
     echo -e "\n${CYAN}--- Cloudflare Worker 自动化部署 ---${NC}"
-    echo -e "说明：此操作将自动在你的 CF 账户创建 KV 命名空间并部署中继脚本。"
+    echo -e "说明：此操作将自动在你的 CF 账户创建 D1 数据库并部署中继脚本。"
     
     if [[ -z "$CF_ACCOUNT_ID" ]]; then
+        echo -e "\n${CYAN}获取 Account ID:${PLAIN}"
+        echo -e "   - 登录 Cloudflare 官网 (dash.cloudflare.com)。"
+        echo -e "   - 在首页右侧栏最下方可以看到 'Account ID'。"
         read -p "请输入 Cloudflare Account ID: " CF_ACCOUNT_ID
     fi
-    read -p "请输入 Cloudflare API Token (需 Workers/KV 修改权限): " CF_API_TOKEN
+
+    echo -e "\n${CYAN}获取 API Token:${PLAIN}"
+    echo -e "   - 电脑端访问: https://dash.cloudflare.com/profile/api-tokens"
+    echo -e "   - 点击 '创建令牌' -> 使用 '编辑 Cloudflare Workers' 模板。"
+    echo -e "   - 在 '账户资源' 选 '所有账户'，'区域资源' 选 '所有区域'。"
+    read -p "请输入 Cloudflare API Token: " CF_API_TOKEN
     
     if [[ -z "$CF_ACCOUNT_ID" || -z "$CF_API_TOKEN" ]]; then
         log_err "Account ID 或 Token 不能为空，取消自动化部署。"
@@ -790,20 +805,22 @@ install_ws_tls() {
         [[ -z "$CF_TOKEN" ]] && { log_err "静默模式安装 WS-TLS 必须提供 Cloudflare Token"; exit 1; }
         WS_PATH="${WS_PATH:-${EXISTING_PATH:-/lovelinux}}"
     else
-        echo -e "\n${BLUE}[配置 1/4] 你的域名${PLAIN}"
-        echo -e "说明: 必须是已在 Cloudflare 解析并托管的域名 (例如: vps.example.com)。"
+        echo -e "\n${BLUE}[配置 1/4] 你的域名 (Domain)${PLAIN}"
+        echo -e "说明: 必须是已托管在 Cloudflare 的域名 (如: node1.example.com)。"
+        echo -e "注意: 请确保你在 CF 中已将该域名解析到本服务器 IP，且开启或关闭云朵(Proxy)均可。"
         read -p "请输入域名 [当前: ${EXISTING_DOMAIN:-example.com}]: " DOMAIN
         DOMAIN="${DOMAIN:-${EXISTING_DOMAIN}}"
         if [ -z "$DOMAIN" ]; then log_err "错误: 域名不能为空"; exit 1; fi
 
         echo -e "\n${BLUE}[配置 2/4] Cloudflare API Token${PLAIN}"
-        echo -e "说明: 用于自动修改 DNS 记录和申请证书。需要 '区域.DNS:编辑' 权限。"
+        echo -e "说明: 用于自动管理该域名的解析记录。权限至少需要 '区域-DNS-编辑'。"
+        echo -e "获取: 请访问 https://dash.cloudflare.com/profile/api-tokens 创建。"
         read -p "请输入 API Token [当前: ${CF_TOKEN:-(未填)}]: " INPUT_TOKEN
         CF_TOKEN="${INPUT_TOKEN:-${CF_TOKEN}}"
         if [ -z "$CF_TOKEN" ]; then log_err "错误: Token 不能为空"; exit 1; fi
         
         echo -e "\n${BLUE}[配置 3/4] 用户 ID (UUID)${PLAIN}"
-        echo -e "说明: 建议直接回车使用系统生成的推荐 ID。"
+        echo -e "说明: 相当于你的连接密码。建议直接回车使用系统生成的推荐 ID。"
         read -p "请输入 UUID [默认: ${EXISTING_UUID:-$(uuidgen)}]: " UUID
         UUID="${UUID:-${EXISTING_UUID:-$(uuidgen)}}"
         
