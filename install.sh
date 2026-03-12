@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.5 - Dashboard Intelligence)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.6 - Unified Command Center)
 # =================================================================
 
-VERSION="v1.9.5"
+VERSION="v1.9.6"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -459,7 +459,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.9.5)..."
+    log_info "正在配置云端 D1 数据库 (v1.9.6)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -591,7 +591,7 @@ async function handleTelegramUpdate(update, env) {
     if (text === "/start" || text === "/menu" || cbData === "show_main") {
         const welcome = `🏰 <b>AutoVPN 守护者集群控制台</b>\n\n当前状态: 🟢 系统运行中\n版本号: <code>v${nodeV}</code>\n\n请选择操作模块:`;
         const btns = [
-            [{ text: "📊 节点看板", callback_data: "show_status" }, { text: "📈 数据罗盘", callback_data: "show_stats" }],
+            [{ text: "📊 节点看板 (全维度)", callback_data: "show_status" }],
             [{ text: "🚑 救援日志", callback_data: "show_rescue" }, { text: "📡 路由管理", callback_data: "show_routing" }],
             [{ text: "☁️ 云端同步", callback_data: "show_update" }, { text: "🔐 安全中心", callback_data: "show_security" }],
             [{ text: "⚙️ 向导说明", url: "https://github.com/ecolid/autovpn" }]
@@ -622,7 +622,7 @@ async function handleTelegramUpdate(update, env) {
     if (text === "/status" || cbData === "show_status") {
         const nodes = await env.DB.prepare("SELECT * FROM nodes ORDER BY t DESC").all();
         let selectedCount = 0;
-        let res = "🖥️ <b>节点实时状态</b>\n";
+        let res = `🖥️ <b>集群指挥中心 (v${nodeV})</b>\n\n`;
         const btns = [];
         for (const s of nodes.results) {
             if (s.id === 'INSTALL_VERIFY') continue;
@@ -630,18 +630,22 @@ async function handleTelegramUpdate(update, env) {
             const sel = s.is_selected ? " [✅]" : "";
             if (s.is_selected) selectedCount++;
             
-            let h = { xray: "FAIL", nginx: "FAIL", warp: "SKIP" }, q = { china: { lat: 0, loss: 0 } };
+            let h = { xray: "FAIL", nginx: "FAIL", warp: "SKIP" }, q = { china: { lat: 0, loss: 0 }, global: { lat: 0, loss: 0 } }, t = { up: 0, down: 0 };
             try { h = JSON.parse(s.health || "{}"); } catch (e) { }
             try { q = JSON.parse(s.quality || "{}"); } catch (e) { }
-            
+            try { t = JSON.parse(s.traffic_total || "{}"); } catch (e) { }
+
+            const upGB = (t.up / (1024 ** 3)).toFixed(2);
+            const downGB = (t.down / (1024 ** 3)).toFixed(2);
             const x = h.xray === "OK" ? "🟢" : "🔴";
             const n = h.nginx === "OK" ? "🟢" : "🔴";
             const w = (h.warp === "OFF" || h.warp === "SKIP") ? "⚪" : (h.warp === "OK" ? "🟢" : "🔴");
-            const qStr = `⚡ ${q.china?.lat || "--"}ms | 📉 ${q.china?.loss || 0}%`;
+            const qStr = `🇨🇳${q.china?.lat || "--"}ms/${q.china?.loss || 0}% | 🌐${q.global?.lat || "--"}ms/${q.global?.loss || 0}%`;
 
-            res += `<b>${s.id}</b> [${st}] ${sel}\n`;
+            res += `🌩️ <b>${s.id}</b> [${st}] ${sel}\n`;
             res += `├ IP: <code>${s.ip}</code> | v${s.v}\n`;
             res += `├ 服务: X:${x} N:${n} W:${w} | ${qStr}\n`;
+            res += `├ 流量: 🔼 ${upGB}GB | 🔽 ${downGB}GB\n`;
             res += `└ 负荷: ${genBar(s.cpu)}\n\n`;
             
             btns.push([
@@ -662,27 +666,6 @@ async function handleTelegramUpdate(update, env) {
         const nodeId = cbData.split("_")[1];
         await env.DB.prepare("UPDATE nodes SET is_selected = 1 - is_selected WHERE id = ?").bind(nodeId).run();
         return await handleTelegramUpdate({ callback_query: { data: "show_status", message: msg } }, env);
-    }
-
-    if (text === "/stats" || cbData === "show_stats") {
-        const nodes = await env.DB.prepare("SELECT * FROM nodes ORDER BY t DESC").all();
-        let report = `📊 <b>数据罗盘监测 (v${nodeV})</b>\n\n`;
-        for (const s of nodes.results) {
-            if (s.id === 'INSTALL_VERIFY') continue;
-            let t = { up: 0, down: 0 }, q = { china: { lat: 0, jit: 0, loss: 0 }, global: { lat: 0, jit: 0, loss: 0 } };
-            try { t = JSON.parse(s.traffic_total || "{}"); } catch (e) { }
-            try { q = JSON.parse(s.quality || "{}"); } catch (e) { }
-            const upGB = (t.up / (1024 ** 3)).toFixed(2);
-            const downGB = (t.down / (1024 ** 3)).toFixed(2);
-            const cL = q.china?.loss > 5 ? "⚠️" : "✅";
-            const gL = q.global?.loss > 5 ? "⚠️" : "✅";
-            report += `🌩️ <b>${s.id}</b>\n`;
-            report += `├ <b>累计流量:</b> 🔼 上行 ${upGB}GB | 🔽 下行 ${downGB}GB\n`;
-            report += `└ <b>全球加速:</b> 📶 延时 ${q.global?.lat || 0}ms | 🎢 抖动 ${q.global?.jit || 0}ms | ${gL} 丢包 ${q.global?.loss || 0}%\n\n`;
-        }
-        report += "💡 <i>注: 核心服务状态与国内延时已集成至【节点看板】。</i>";
-        const btns = [[{ text: "🔄 刷新", callback_data: "show_stats" }, { text: "🔙 返回", callback_data: "show_main" }]];
-        await sendTelegram(BOT_TOKEN, CHAT_ID, report, { inline_keyboard: btns }, update.callback_query?.message.message_id);
     }
 
     if (text === "/ssh" || cbData === "show_security") {
@@ -1179,11 +1162,11 @@ setup_guardian_bot() {
         fi
     fi
 
-    # 创建驱动脚本 (v1.9.5 - Dashboard Intelligence)
+    # 创建驱动脚本 (v1.9.6 - Dashboard Intelligence)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, statistics, sys, socket
 
-VERSION = "1.9.5"
+VERSION = "1.9.6"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
 
