@@ -116,7 +116,7 @@ async function handleTelegramUpdate(update, env) {
     if (text === "/status" || cbData === "show_status") {
         const nodes = await env.DB.prepare("SELECT * FROM nodes ORDER BY t DESC").all();
         let selectedCount = 0;
-        let res = "�️ <b>节点实时状态 (v1.8.3)</b>\n";
+        let res = "🖥️ <b>节点实时状态 (v1.8.3)</b>\n";
         const btns = [];
         for (const s of nodes.results) {
             const st = s.state === 'online' ? "🟢" : "🔴";
@@ -154,7 +154,7 @@ async function handleTelegramUpdate(update, env) {
     // 2. Data Stats Board (v1.8.0)
     if (text === "/stats" || cbData === "show_stats") {
         const nodes = await env.DB.prepare("SELECT * FROM nodes ORDER BY t DESC").all();
-        let report = "� <b>数据罗盘监测 (v1.8.3)</b>\n\n";
+        let report = "📊 <b>数据罗盘监测 (v1.8.3)</b>\n\n";
 
         for (const s of nodes.results) {
             let t = { up: 0, down: 0 }, q = { china: { lat: 0, jit: 0, loss: 0 } };
