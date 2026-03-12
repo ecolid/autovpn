@@ -254,9 +254,34 @@ send_tg_msg() {
     local message="$1"
     if [ ! -z "$TG_BOT_TOKEN" ] && [ ! -z "$TG_CHAT_ID" ]; then
         curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
-            -d "chat_id=${TG_CHAT_ID}" \
-            -d "text=${message}" \
-            -d "parse_mode=Markdown" > /dev/null
+            --data-urlencode "chat_id=${TG_CHAT_ID}" \
+            --data-urlencode "text=${message}" \
+            --data-urlencode "parse_mode=Markdown" > /dev/null
+    fi
+}
+
+# 辅助：同步老板公钥 DNA (v1.8.3)
+sync_owner_dna() {
+    local d1_id=$(cat /usr/local/etc/autovpn/.d1_id 2>/dev/null)
+    [ -z "$d1_id" ] && return 0
+    [ -z "$CF_ACCOUNT_ID" ] || [ -z "$CF_API_TOKEN" ] && return 0
+
+    log_info "正在校验老板 DNA 同步状态..."
+    local key_res=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
+        -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
+        -d "{\"sql\": \"SELECT val FROM config WHERE key = 'SSH_OWNER_PUB'\"}")
+    local owner_pub=$(echo "$key_res" | jq -r '.result[0].results[0].val')
+
+    local detected_owner=$(grep -v "guardian.py" /root/.ssh/authorized_keys 2>/dev/null | grep "ssh-rsa" | head -n 1)
+    if [[ ! -z "$detected_owner" ]]; then
+        if [[ "$owner_pub" == "null" || -z "$owner_pub" || "$detected_owner" != "$owner_pub" ]]; then
+            log_info "发现新老板公钥 DNA，正在同步云端..."
+            local sql_owner="INSERT OR REPLACE INTO config (key, val) VALUES ('SSH_OWNER_PUB', '$detected_owner')"
+            local p_owner=$(jq -n --arg sql "$sql_owner" '{"sql": $sql}')
+            curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
+                -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
+                -d "$p_owner" > /dev/null
+        fi
     fi
 }
 
@@ -866,18 +891,7 @@ setup_guardian_bot() {
         fi
 
         # 2. [v1.8.3] 自动识别并刷新“老板密钥” (Owner DNA Sync)
-        local detected_owner=$(grep -v "guardian.py" /root/.ssh/authorized_keys 2>/dev/null | grep "ssh-rsa" | head -n 1)
-        if [[ ! -z "$detected_owner" ]]; then
-            if [[ "$owner_pub" == "null" || -z "$owner_pub" || "$detected_owner" != "$owner_pub" ]]; then
-                log_info "发现新老板公钥 DNA，正在同步云端..."
-                owner_pub="$detected_owner"
-                local sql_owner="INSERT OR REPLACE INTO config (key, val) VALUES ('SSH_OWNER_PUB', '$owner_pub')"
-                local p_owner=$(jq -n --arg sql "$sql_owner" '{"sql": $sql}')
-                curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
-                    -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
-                    -d "$p_owner" > /dev/null
-            fi
-        fi
+        sync_owner_dna
         
         # 3. 部署私钥 (用于医生节点外访)
         echo "$prv_key" > /usr/local/etc/autovpn/cluster_key
