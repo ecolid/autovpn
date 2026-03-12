@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.4 - Update Consistency)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.5 - Dashboard Intelligence)
 # =================================================================
 
-VERSION="v1.9.4"
+VERSION="v1.9.5"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -459,7 +459,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.9.4)..."
+    log_info "正在配置云端 D1 数据库 (v1.9.5)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -629,9 +629,21 @@ async function handleTelegramUpdate(update, env) {
             const st = s.state === 'online' ? "🟢" : "🔴";
             const sel = s.is_selected ? " [✅]" : "";
             if (s.is_selected) selectedCount++;
+            
+            let h = { xray: "FAIL", nginx: "FAIL", warp: "SKIP" }, q = { china: { lat: 0, loss: 0 } };
+            try { h = JSON.parse(s.health || "{}"); } catch (e) { }
+            try { q = JSON.parse(s.quality || "{}"); } catch (e) { }
+            
+            const x = h.xray === "OK" ? "🟢" : "🔴";
+            const n = h.nginx === "OK" ? "🟢" : "🔴";
+            const w = (h.warp === "OFF" || h.warp === "SKIP") ? "⚪" : (h.warp === "OK" ? "🟢" : "🔴");
+            const qStr = `⚡ ${q.china?.lat || "--"}ms | 📉 ${q.china?.loss || 0}%`;
+
             res += `<b>${s.id}</b> [${st}] ${sel}\n`;
             res += `├ IP: <code>${s.ip}</code> | v${s.v}\n`;
+            res += `├ 服务: X:${x} N:${n} W:${w} | ${qStr}\n`;
             res += `└ 负荷: ${genBar(s.cpu)}\n\n`;
+            
             btns.push([
                 { text: `${s.is_selected ? '❌ 取消勾选' : '✔️ 勾选升级'}`, callback_data: `chk_${s.id}` },
                 { text: `🛠️ 管理`, callback_data: `mgr_${s.id}` }
@@ -665,11 +677,10 @@ async function handleTelegramUpdate(update, env) {
             const cL = q.china?.loss > 5 ? "⚠️" : "✅";
             const gL = q.global?.loss > 5 ? "⚠️" : "✅";
             report += `🌩️ <b>${s.id}</b>\n`;
-            report += `├ <b>累计流量:</b> 🔼 ${upGB}GB | 🔽 ${downGB}GB\n`;
-            report += `├ <b>国内优选 (223.5.5.5):</b> 📶延时 ${q.china?.lat || 0}ms | 🎢抖动 ${q.china?.jit || 0}ms | ${cL}丢包 ${q.china?.loss || 0}%\n`;
-            report += `└ <b>全球加速 (1.1.1.1):</b> 📶延时 ${q.global?.lat || 0}ms | 🎢抖动 ${q.global?.jit || 0}ms | ${gL}丢包 ${q.global?.loss || 0}%\n\n`;
+            report += `├ <b>累计流量:</b> 🔼 上行 ${upGB}GB | 🔽 下行 ${downGB}GB\n`;
+            report += `└ <b>全球加速:</b> 📶 延时 ${q.global?.lat || 0}ms | 🎢 抖动 ${q.global?.jit || 0}ms | ${gL} 丢包 ${q.global?.loss || 0}%\n\n`;
         }
-        report += "💡 <i>注: 1~10ms 极低延迟通常源于 Anycast 优选路由，属正常高性能表现。</i>";
+        report += "💡 <i>注: 核心服务状态与国内延时已集成至【节点看板】。</i>";
         const btns = [[{ text: "🔄 刷新", callback_data: "show_stats" }, { text: "🔙 返回", callback_data: "show_main" }]];
         await sendTelegram(BOT_TOKEN, CHAT_ID, report, { inline_keyboard: btns }, update.callback_query?.message.message_id);
     }
@@ -1168,11 +1179,11 @@ setup_guardian_bot() {
         fi
     fi
 
-    # 创建驱动脚本 (v1.9.4 - Data Compass + Sentinel)
+    # 创建驱动脚本 (v1.9.5 - Dashboard Intelligence)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, statistics, sys, socket
 
-VERSION = "1.9.4"
+VERSION = "1.9.5"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
 
