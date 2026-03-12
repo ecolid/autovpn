@@ -2,10 +2,10 @@
 set -e
 
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.4)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.5)
 # =================================================================
 
-VERSION="v1.8.4"
+VERSION="v1.8.5"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -251,6 +251,26 @@ uninstall_all() {
 }
 
 # 辅助：发送 TG 消息
+# 辅助：脚本在线自我更新 (v1.8.5)
+update_script() {
+    log_info "正在从 GitHub 检查最新版本..."
+    local remote_version=$(curl -sL https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh | grep -m1 'VERSION=' | cut -d'"' -f2)
+    
+    if [[ "$remote_version" == "$VERSION" ]]; then
+        log_info "当前已是最新版本 ($VERSION)，无需更新。"
+        return 0
+    fi
+
+    log_warn "检测到新版本: $remote_version (当前 $VERSION)"
+    read -p "是否立即升级脚本？ [Y/n]: " do_update
+    if [[ ! "$do_update" =~ ^[Nn]$ ]]; then
+        wget -N https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh && chmod +x install.sh
+        log_info "✅ 脚本已进化至 $remote_version！正在重启..."
+        sleep 1
+        exec ./install.sh
+    fi
+}
+
 send_tg_msg() {
     local message="$1"
     if [ ! -z "$TG_BOT_TOKEN" ] && [ ! -z "$TG_CHAT_ID" ]; then
@@ -431,7 +451,7 @@ deploy_cf_worker() {
     log_info "正在上传并绑定 Worker 脚本..."
     cat > /tmp/worker.js <<'EOF_JS'
 /**
- * Cloudflare Worker for AutoVPN Guardian Cluster (v1.8.3 - Stable Data Compass)
+ * Cloudflare Worker for AutoVPN Guardian Cluster (v1.8.5 - Self-Evolution)
  * Orchestrates: Inter-node Rescue, Interactive Deployment Wizard, Bulk Updates.
  */
 
@@ -1555,7 +1575,7 @@ show_menu() {
         echo -e "  ${GREEN}8.${PLAIN} ${YELLOW}Guardian 集群 & 机器人 (D1 状态机)${PLAIN}"
         echo ""
         echo -e "${BLUE}[ 脚本选项 ]${PLAIN}"
-        echo -e "  ${RED}9. 彻底卸载项目${PLAIN} | ${CYAN}0. 退出管家${PLAIN}"
+        echo -e "  ${GREEN}9.${PLAIN} 脚本维护 (更新/卸载) | ${CYAN}0. 退出管家${PLAIN}"
         echo -e "${CYAN}----------------------------------------------------------${PLAIN}"
         read -p " 请输入指令 [0-9]: " choice
 
@@ -1574,7 +1594,18 @@ show_menu() {
             ;;
         7) open_ports 80; open_ports 443; [ ! -z "$EXISTING_PORT" ] && open_ports $EXISTING_PORT; log_info "防火墙策略已更新。"; read -p "按回车键返回菜单..." ;;
         8) setup_guardian_bot; read -p "按回车键返回菜单..." ;;
-        9) uninstall_all; exit 0 ;;
+        9) 
+            echo -e "\n${BLUE}--- 脚本维护选项 ---${NC}"
+            echo -e "1. 检查并更新脚本 (Self-Update)"
+            echo -e "2. 彻底卸载 AutoVPN (清理所有配置)"
+            echo -e "0. 返回主菜单"
+            read -p "请选择: " maint_choice
+            case $maint_choice in
+                1) update_script ;;
+                2) uninstall_all; exit 0 ;;
+                *) continue ;;
+            esac
+            ;;
         0) exit 0 ;;
         *) log_err "无效输入"; sleep 1 ;;
     esac
