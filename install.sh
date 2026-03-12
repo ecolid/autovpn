@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.0.3 - Migration Hotfix)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.1 - Cloud Orchestrator)
 # =================================================================
 
-VERSION="v1.9.0.3"
+VERSION="v1.9.1"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -64,6 +64,10 @@ cf_api() {
 
     local success=$(echo "$res" | jq -r '.success')
     if [[ "$success" != "true" ]]; then
+        # 兼容处理：如果是因为资源已存在（如 D1 数据库重名），则静默跳过报错
+        if echo "$res" | jq -e '.errors[0].code == 7502' >/dev/null 2>&1; then
+            return 0
+        fi
         echo -e "${RED}[ERROR] Cloudflare 业务报错!${NC}" >&2
         echo "$res" | jq . >&2
         return 1
@@ -454,7 +458,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.9.0.3)..."
+    log_info "正在配置云端 D1 数据库 (v1.9.1)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -583,13 +587,34 @@ async function handleTelegramUpdate(update, env) {
     const cbData = update.callback_query ? update.callback_query.data : null;
 
     if (text === "/start" || text === "/menu" || cbData === "show_main") {
-        const welcome = "� <b>AutoVPN 守护者集群控制台</b>\n\n当前状态: 🟢 系统运行中\n版本号: <code>v1.9.0</code>\n\n请选择操作模块:";
+        const welcome = "🏰 <b>AutoVPN 守护者集群控制台</b>\n\n当前状态: 🟢 系统运行中\n版本号: <code>v1.9.1</code>\n\n请选择操作模块:";
         const btns = [
             [{ text: "📊 节点看板", callback_data: "show_status" }, { text: "📈 数据罗盘", callback_data: "show_stats" }],
-            [{ text: "� 救援日志", callback_data: "show_rescue" }, { text: "📡 路由管理", callback_data: "show_routing" }],
-            [{ text: "🔐 安全中心", callback_data: "show_security" }, { text: "⚙️ 向导说明", url: "https://github.com/ecolid/autovpn" }]
+            [{ text: "🚑 救援日志", callback_data: "show_rescue" }, { text: "📡 路由管理", callback_data: "show_routing" }],
+            [{ text: "☁️ 云端同步", callback_data: "show_update" }, { text: "🔐 安全中心", callback_data: "show_security" }],
+            [{ text: "⚙️ 向导说明", url: "https://github.com/ecolid/autovpn" }]
         ];
         await sendTelegram(BOT_TOKEN, CHAT_ID, welcome, { inline_keyboard: btns }, update.callback_query?.message.message_id);
+    }
+
+    if (cbData === "show_update") {
+        const res = "☁️ <b>云端同步中心</b>\n\n此操作将指令发送给 VPS 节点执行:\n1. 自动从 GitHub 拉取脚本更新 (install.sh)\n2. 重新编译并发布最新的 Cloudflare Worker\n3. 同步 D1 表结构与机器人菜单\n\n💡 建议在 GitHub 发布新版本后执行。";
+        const btns = [
+            [{ text: "🚀 执行全量远程同步", callback_data: "exec_remote_update" }],
+            [{ text: "🔙 返回", callback_data: "show_main" }]
+        ];
+        await sendTelegram(BOT_TOKEN, CHAT_ID, res, { inline_keyboard: btns }, update.callback_query.message.message_id);
+    }
+
+    if (cbData === "exec_remote_update") {
+        const node = await env.DB.prepare("SELECT id FROM nodes WHERE state = 'online' LIMIT 1").first();
+        if (!node) {
+            await sendTelegram(BOT_TOKEN, CHAT_ID, "❌ <b>同步失败</b>: 当前无在线节点可执行更新。");
+        } else {
+            const taskId = Math.floor(Date.now() / 1000);
+            await env.DB.prepare("INSERT INTO commands (target_id, cmd, task_id, status) VALUES (?, 'SELF_UPDATE', ?, 'pending')").bind(node.id, taskId).run();
+            await sendTelegram(BOT_TOKEN, CHAT_ID, `⏳ <b>指令已下发</b>\n已委派节点 <code>${node.id}</code> 执行全量同步。\n更新完成后，版本号将发生变化。`, null, update.callback_query.message.message_id);
+        }
     }
 
     if (text === "/status" || cbData === "show_status") {
@@ -1225,6 +1250,8 @@ def main():
                         key_path = "/usr/local/etc/autovpn/cluster_key"
                         ssh_cmd = f"ssh -i {key_path} -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@{target_ip} exit"
                         res = "✅ 成功" if os.system(ssh_cmd) == 0 else f"❌ 失败: {target_ip}"
+                    elif task["cmd"] == "SELF_UPDATE":
+                        res = run_shell("wget -qO /tmp/install.sh https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh && bash /tmp/install.sh --update-bot --silent")
                     else:
                         res = run_shell(f"bash /usr/local/bin/autovpn {task['cmd']}")
                     requests.post(f"{cf_url}/report", json=get_status_data(tid=task['task_id'], res=res), 
