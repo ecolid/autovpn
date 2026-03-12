@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.9.2)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.9.3)
 # =================================================================
 
-VERSION="v1.8.9.2"
+VERSION="v1.8.9.3"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -793,7 +793,9 @@ function parseVless(link) {
 }
 EOF_JS
     # 准备 Worker 上传
-    local worker_js_final=$(cat /tmp/worker.js | sed "s/your_private_token_here/${CLUSTER_TOKEN}/g")
+    local worker_js_final_path="/tmp/worker_final.js"
+    cat /tmp/worker.js | sed "s/your_private_token_here/${CLUSTER_TOKEN}/g" > "$worker_js_final_path"
+    
     cat > /tmp/metadata.json <<EOF
 {
   "main_module": "index.js",
@@ -803,7 +805,7 @@ EOF
     local upload_res=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/autovpn-relay" \
         -H "Authorization: Bearer ${CF_API_TOKEN}" \
         -F "metadata=@/tmp/metadata.json;type=application/json" \
-        -F "index.js=$worker_js_final;type=application/javascript+module" 2>&1)
+        -F "index.js=@${worker_js_final_path};type=application/javascript+module" 2>&1)
     
     if [[ $? -ne 0 ]] || ! echo "$upload_res" | grep -q '"success":true'; then
         log_err "Worker 脚本上传失败!"
