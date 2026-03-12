@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.3 - Final Polish)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.4 - Update Consistency)
 # =================================================================
 
-VERSION="v1.9.3"
+VERSION="v1.9.4"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -459,7 +459,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.9.3)..."
+    log_info "正在配置云端 D1 数据库 (v1.9.4)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -786,7 +786,7 @@ async function handleTelegramUpdate(update, env) {
         const baseNow = Date.now();
         for (let i = 0; i < selected.results.length; i++) {
             const n = selected.results[i];
-            await env.DB.prepare("INSERT INTO commands (target_id, cmd, task_id) VALUES (?, ?, ?)").bind(n.id, "--update-bot", baseNow + i).run();
+            await env.DB.prepare("INSERT INTO commands (target_id, cmd, task_id) VALUES (?, 'SELF_UPDATE', ?)").bind(n.id, baseNow + i).run();
         }
         await env.DB.prepare("UPDATE nodes SET is_selected = 0").run();
         await sendTelegram(BOT_TOKEN, CHAT_ID, `✅ 已成功下发指令。`);
@@ -1168,11 +1168,11 @@ setup_guardian_bot() {
         fi
     fi
 
-    # 创建驱动脚本 (v1.9.3 - Data Compass + Sentinel)
+    # 创建驱动脚本 (v1.9.4 - Data Compass + Sentinel)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, statistics, sys, socket
 
-VERSION = "1.9.3"
+VERSION = "1.9.4"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
 
