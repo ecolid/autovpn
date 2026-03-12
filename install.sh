@@ -25,6 +25,7 @@ while [[ $# -gt 0 ]]; do
         --domain) DOMAIN="$2"; shift 2 ;;
         --cf-token) CF_TOKEN="$2"; shift 2 ;;
         --mode) INSTALL_MODE="$2"; shift 2 ;; # 明确指定安装模式 (reality/ws)
+        --rotate-keys) ROTATE_KEYS=1; shift ;;
         --update-bot)
             ENV_PATH="/usr/local/etc/autovpn/.env"
             if [ -f "$ENV_PATH" ]; then source "$ENV_PATH"; fi
@@ -390,8 +391,76 @@ EOF
         -d "url=https://autovpn-relay.$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/subdomain" -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result.subdomain').workers.dev/webhook" > /dev/null
 
     log_info "✅ D1 状态机监控中心已激活！"
-    echo -e "Cluster Mode: ${CYAN}D1 StatusMachine (v1.8.2)${NC}"
+    echo -e "Cluster Mode: ${CYAN}D1 StatusMachine (v1.8.3)${NC}"
     return 0
+}
+
+# 辅助：集群密钥轮换 (v1.8.3 - Zero-Downtime Rotation)
+rotate_cluster_keys() {
+    local d1_id=$(cat /usr/local/etc/autovpn/.d1_id 2>/dev/null)
+    if [[ -z "$d1_id" ]]; then log_err "未检测到集群信息，无法轮换"; return 1; fi
+
+    log_info "--- 正在进行密钥轮换 (v1.8.3) ---"
+    
+    # 步骤 1: 生成新密钥
+    log_info "1. 正在生成全新机器人密钥对..."
+    ssh-keygen -t rsa -b 2048 -f /tmp/id_new -N "" -q
+    local new_prv=$(cat /tmp/id_new)
+    local new_pub=$(cat /tmp/id_new.pub)
+    
+    # 获取当前在线节点列表
+    local nodes_res=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
+        -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
+        -d "{\"sql\": \"SELECT id, ip FROM nodes WHERE state = 'online'\"}")
+    local nodes=$(echo "$nodes_res" | jq -r '.result[0].results[].ip')
+    
+    # 步骤 2: 部署新锁 (Dual-Key)
+    log_info "2. 正在向全集群分发新公钥 (双锁过渡)..."
+    for ip in $nodes; do
+        log_info "   -> 正在准备节点: $ip"
+        ssh -i /usr/local/etc/autovpn/cluster_key -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$ip \
+            "echo '$new_pub' >> /root/.ssh/authorized_keys" && log_info "      ✅ 已挂上新锁" || log_warn "      ❌ 挂锁失败: $ip"
+    done
+
+    # 步骤 3: 验证新钥匙
+    log_info "3. 正在验证新钥匙连通性..."
+    local test_ip=$(echo "$nodes" | head -n 1)
+    if [[ ! -z "$test_ip" ]]; then
+        if ssh -i /tmp/id_new -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$test_ip "exit" 2>/dev/null; then
+            log_info "   ✅ 验证通过：新钥匙工作正常！"
+        else
+            log_err "   ❌ 验证失败：新钥匙无法登入，正在回滚..."
+            rm -f /tmp/id_new*
+            return 1
+        fi
+    fi
+
+    # 步骤 4: 提交并清理旧锁
+    log_info "4. 正在同步云端并清理旧公钥..."
+    local old_pub=$(cat /usr/local/etc/autovpn/cluster_key.pub 2>/dev/null)
+    
+    # 更新 D1
+    local sql_upd="INSERT OR REPLACE INTO config (key, val) VALUES ('SSH_PRV', '$new_prv'), ('SSH_PUB', '$new_pub')"
+    local payload=$(jq -n --arg sql "$sql_upd" '{"sql": $sql}')
+    curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
+        -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
+        -d "$payload" > /dev/null
+
+    # 全集群撤旧锁
+    for ip in $nodes; do
+        if [[ ! -z "$old_pub" ]]; then
+            ssh -i /tmp/id_new -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$ip \
+                "sed -i \"\|$old_pub|d\" /root/.ssh/authorized_keys" && log_info "   -> 节点 $ip: 旧锁已卸载" || log_warn "   -> 节点 $ip: 卸木失败"
+        fi
+    done
+
+    # 更新本地
+    mv /tmp/id_new /usr/local/etc/autovpn/cluster_key
+    mv /tmp/id_new.pub /usr/local/etc/autovpn/cluster_key.pub
+    chmod 600 /usr/local/etc/autovpn/cluster_key
+    
+    log_info "✨ 密钥轮换圆满完成！全集群已进入新纪元。"
+    rm -f /tmp/id_new*
 }
 
 # 辅助：配置 Guardian Bot (Python 交互式机器人 & 集群增强)
@@ -411,7 +480,7 @@ setup_guardian_bot() {
     
     local d1_id=$(cat /usr/local/etc/autovpn/.d1_id 2>/dev/null)
     if [[ ! -z "$d1_id" ]]; then
-        # 尝试从 D1 获取所有密钥 (v1.8.2: 增加 SSH_OWNER_PUB)
+        # 尝试从 D1 获取所有密钥 (v1.8.3: 增加 SSH_OWNER_PUB)
         local key_res=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
             -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
             -d "{\"sql\": \"SELECT key, val FROM config WHERE key IN ('SSH_PRV', 'SSH_PUB', 'SSH_OWNER_PUB')\"}")
@@ -434,12 +503,11 @@ setup_guardian_bot() {
             rm -f /tmp/id_cluster*
         fi
 
-        # 2. [v1.8.2] 自动识别并保存“老板密钥” (Owner DNA)
-        if [[ "$owner_pub" == "null" || -z "$owner_pub" ]]; then
-            # 扫描 authorized_keys 中不带 guardian 限制标记的公钥
-            local detected_owner=$(grep -v "guardian.py" /root/.ssh/authorized_keys 2>/dev/null | grep "ssh-rsa" | head -n 1)
-            if [[ ! -z "$detected_owner" ]]; then
-                log_info "发现老板公钥 DNA，正在备份至云端..."
+        # 2. [v1.8.3] 自动识别并刷新“老板密钥” (Owner DNA Sync)
+        local detected_owner=$(grep -v "guardian.py" /root/.ssh/authorized_keys 2>/dev/null | grep "ssh-rsa" | head -n 1)
+        if [[ ! -z "$detected_owner" ]]; then
+            if [[ "$owner_pub" == "null" || -z "$owner_pub" || "$detected_owner" != "$owner_pub" ]]; then
+                log_info "发现新老板公钥 DNA，正在同步云端..."
                 owner_pub="$detected_owner"
                 local sql_owner="INSERT OR REPLACE INTO config (key, val) VALUES ('SSH_OWNER_PUB', '$owner_pub')"
                 local p_owner=$(jq -n --arg sql "$sql_owner" '{"sql": $sql}')
@@ -470,7 +538,7 @@ setup_guardian_bot() {
 
         # 5. 向老板展示公钥以便其手动配置 VPS 后台
         if [[ "$mode" != "silent" ]]; then
-            echo -e "\n${BLUE}--- SSH 资产清单 (v1.8.2) ---${NC}"
+            echo -e "\n${BLUE}--- SSH 资产清单 (v1.8.3) ---${NC}"
             echo -e "机器人公钥: ${YELLOW}${pub_key}${NC}"
             echo -e "💡 建议将上方【机器人公钥】上传到 VPS 服务商后台，实现全自动一键扩容。"
         fi
@@ -518,11 +586,11 @@ setup_guardian_bot() {
         fi
     fi
 
-    # 创建驱动脚本 (v1.8.2 - Data Compass + Sentinel)
+    # 创建驱动脚本 (v1.8.3 - Data Compass + Sentinel)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, sys, socket, statistics
 
-VERSION = "v1.8.2"
+VERSION = "v1.8.3"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
 
@@ -1097,16 +1165,13 @@ fi
 # 启动入口
 # =================================================================
 main() {
-    # 如果是 BOT 自动更新，则跳过菜单，直接执行配置并退出
-    if [[ "$AUTO_UPDATE_BOT" == "1" ]]; then
-        log_info ">>> 检测到机器人热更新指令，正在重新部署守护进程..."
-        # 确保目录存在
-        mkdir -p /usr/local/etc/autovpn
-        # 执行机器人配置逻辑 (由脚本中的 setup_guardian_bot 提供)
-        setup_guardian_bot silent
-        log_info "✅ 机器人已完成热更新。"
+    if [[ "$ROTATE_KEYS" == "1" ]]; then
+        log_info ">>> 检测到密钥轮换指令，正在启动三步走安全轮换系统..."
+        if [ -f "$ENV_PATH" ]; then source "$ENV_PATH"; fi
+        rotate_cluster_keys
         exit 0
     fi
+    # 如果是 BOT 自动更新，则跳过菜单
     # 如果是静默模式，根据 INSTALL_MODE 自动执行
     if [[ "$MODE" == "silent" ]]; then
         log_info ">>> 检测到静默安装模式: $INSTALL_MODE"

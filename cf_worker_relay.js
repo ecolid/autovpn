@@ -1,5 +1,5 @@
 /**
- * Cloudflare Worker for AutoVPN Guardian Cluster (v1.8.1 - Stable Data Compass)
+ * Cloudflare Worker for AutoVPN Guardian Cluster (v1.8.3 - Stable Data Compass)
  * Orchestrates: Inter-node Rescue, Interactive Deployment Wizard, Bulk Updates.
  */
 
@@ -67,7 +67,7 @@ export default {
 
             return new Response(JSON.stringify({ ok: true }));
         }
-        return new Response("AutoVPN Orchestrator v1.8.1 Online", { status: 200 });
+        return new Response("AutoVPN Orchestrator v1.8.3 Online", { status: 200 });
     },
 
     async scheduled(event, env) {
@@ -105,7 +105,7 @@ async function handleTelegramUpdate(update, env) {
     if (text === "/status" || cbData === "show_status") {
         const nodes = await env.DB.prepare("SELECT * FROM nodes ORDER BY t DESC").all();
         let selectedCount = 0;
-        let res = "📊 <b>集群实时看板 (v1.8.1)</b>\n";
+        let res = "📊 <b>集群实时看板 (v1.8.3)</b>\n";
         const btns = [];
         for (const s of nodes.results) {
             const st = s.state === 'online' ? "🟢" : "🔴";
