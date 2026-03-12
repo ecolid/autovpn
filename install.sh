@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.9.7)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.9.8)
 # =================================================================
 
-VERSION="v1.8.9.7"
+VERSION="v1.8.9.8"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -452,7 +452,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.8.9.6)..."
+    log_info "正在配置云端 D1 数据库 (v1.8.9.8)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -628,15 +628,17 @@ async function handleTelegramUpdate(update, env) {
         let report = "📊 <b>数据罗盘监测 (v1.8.3)</b>\n\n";
         for (const s of nodes.results) {
             if (s.id === 'INSTALL_VERIFY') continue;
-            let t = { up: 0, down: 0 }, q = { china: { lat: 0, jit: 0, loss: 0 } };
+            let t = { up: 0, down: 0 }, q = { china: { lat: 0, jit: 0, loss: 0 }, global: { lat: 0, jit: 0, loss: 0 } };
             try { t = JSON.parse(s.traffic_total || "{}"); } catch (e) { }
             try { q = JSON.parse(s.quality || "{}"); } catch (e) { }
             const upGB = (t.up / (1024 ** 3)).toFixed(2);
             const downGB = (t.down / (1024 ** 3)).toFixed(2);
-            const lossIcon = q.china?.loss > 5 ? "⚠️" : "✅";
+            const cL = q.china?.loss > 5 ? "⚠️" : "✅";
+            const gL = q.global?.loss > 5 ? "⚠️" : "✅";
             report += `🌩️ <b>${s.id}</b>\n`;
             report += `├ <b>累计流量:</b> 🔼 ${upGB}GB | 🔽 ${downGB}GB\n`;
-            report += `└ <b>链路质量:</b> 📶 延迟:${q.china?.lat || 0}ms | ⏳ 抖动:${q.china?.jit || 0}ms | ${lossIcon} 丢包:${q.china?.loss || 0}%\n\n`;
+            report += `├ <b>国内优选:</b> 📶 ${q.china?.lat || 0}ms | ⏳ ${q.china?.jit || 0}ms | ${cL} ${q.china?.loss || 0}%\n`;
+            report += `└ <b>全球加速:</b> 📶 ${q.global?.lat || 0}ms | ⏳ ${q.global?.jit || 0}ms | ${gL} ${q.global?.loss || 0}%\n\n`;
         }
         const btns = [[{ text: "🔄 刷新", callback_data: "show_stats" }, { text: "🔙 返回", callback_data: "show_main" }]];
         await sendTelegram(BOT_TOKEN, CHAT_ID, report, { inline_keyboard: btns }, update.callback_query?.message.message_id);
