@@ -1,8 +1,9 @@
+#!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.9.1)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.9.2)
 # =================================================================
 
-VERSION="v1.8.9.1"
+VERSION="v1.8.9.2"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -788,6 +789,7 @@ function parseVless(link) {
         const params = new URLSearchParams(url.search);
         let mode = params.get('type') === 'ws' ? 'ws' : 'reality';
         return { uuid, ip: host, port: parseInt(port), mode, domain: params.get('sni') || "" };
+    } catch (e) { return null; }
 }
 EOF_JS
     # 准备 Worker 上传
