@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.1 - Cloud Orchestrator)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.1.1 - D1 ID Fix)
 # =================================================================
 
-VERSION="v1.9.1"
+VERSION="v1.9.1.1"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -64,9 +64,10 @@ cf_api() {
 
     local success=$(echo "$res" | jq -r '.success')
     if [[ "$success" != "true" ]]; then
-        # 兼容处理：如果是因为资源已存在（如 D1 数据库重名），则静默跳过报错
+        # 如果是因为资源已存在 (如 D1 重名 7502)，则不报错到 stderr，但返回 1 让 caller fallback
         if echo "$res" | jq -e '.errors[0].code == 7502' >/dev/null 2>&1; then
-            return 0
+            echo "$res"
+            return 1
         fi
         echo -e "${RED}[ERROR] Cloudflare 业务报错!${NC}" >&2
         echo "$res" | jq . >&2
@@ -458,7 +459,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.9.1)..."
+    log_info "正在配置云端 D1 数据库 (v1.9.1.1)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
