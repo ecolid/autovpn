@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.8.9.8)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.9.0 - Command Orchestrator)
 # =================================================================
 
-VERSION="v1.8.9.8"
+VERSION="v1.9.0"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -452,7 +452,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.8.9.8)..."
+    log_info "正在配置云端 D1 数据库 (v1.9.0)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -580,12 +580,12 @@ async function handleTelegramUpdate(update, env) {
     const text = update.message ? update.message.text : null;
     const cbData = update.callback_query ? update.callback_query.data : null;
 
-    if (text === "/start" || cbData === "show_main") {
-        const welcome = "🎮 <b>AutoVPN 集群控制台</b>\n\n请选择操作模块:";
+    if (text === "/start" || text === "/menu" || cbData === "show_main") {
+        const welcome = "� <b>AutoVPN 守护者集群控制台</b>\n\n当前状态: 🟢 系统运行中\n版本号: <code>v1.9.0</code>\n\n请选择操作模块:";
         const btns = [
-            [{ text: "📊 状态看板", callback_data: "show_status" }, { text: "📈 数据罗盘", callback_data: "show_stats" }],
-            [{ text: "🛡️ 安全中心", callback_data: "show_security" }],
-            [{ text: "⚙️ 向导说明", url: "https://github.com/ecolid/autovpn" }]
+            [{ text: "📊 节点看板", callback_data: "show_status" }, { text: "📈 数据罗盘", callback_data: "show_stats" }],
+            [{ text: "� 救援日志", callback_data: "show_rescue" }, { text: "📡 路由管理", callback_data: "show_routing" }],
+            [{ text: "🔐 安全中心", callback_data: "show_security" }, { text: "⚙️ 向导说明", url: "https://github.com/ecolid/autovpn" }]
         ];
         await sendTelegram(BOT_TOKEN, CHAT_ID, welcome, { inline_keyboard: btns }, update.callback_query?.message.message_id);
     }
@@ -763,6 +763,23 @@ async function handleTelegramUpdate(update, env) {
         return await handleTelegramUpdate({ callback_query: { data: "show_status", message: msg } }, env);
     }
 
+    if (cbData === "show_rescue") {
+        const logs = await env.DB.prepare("SELECT * FROM nodes WHERE state = 'offline' ORDER BY t DESC LIMIT 5").all();
+        let res = "🚑 <b>最近故障/救援记录</b>\n\n";
+        if (logs.results.length === 0) res += "✅ 当前所有节点运行稳健，无待援目标。";
+        else {
+            for (const n of logs.results) res += `🔴 <b>${n.id}</b> 在 <code>${new Date(n.t * 1000).toLocaleString()}</code> 离线\n`;
+        }
+        const btns = [[{ text: "🔙 返回", callback_data: "show_main" }]];
+        await sendTelegram(BOT_TOKEN, CHAT_ID, res, { inline_keyboard: btns }, update.callback_query.message.message_id);
+    }
+
+    if (cbData === "show_routing") {
+        const res = "🛰️ <b>路由与分流中心</b>\n\n当前支持: <b>Reality / WS-TLS</b>\n\n💡 发送任意 <code>vless://</code> 链接即可唤醒部署向导。";
+        const btns = [[{ text: "🔙 返回", callback_data: "show_main" }]];
+        await sendTelegram(BOT_TOKEN, CHAT_ID, res, { inline_keyboard: btns }, update.callback_query.message.message_id);
+    }
+
     if (cbData?.startsWith("mgr_")) {
         const nodeId = cbData.split("_")[1];
         const btns = [[{ text: "⚡ 服务控制", callback_data: `sub_svc_${nodeId}` }], [{ text: "🔍 诊断查询", callback_data: `sub_diag_${nodeId}` }], [{ text: "🔙 返回", callback_data: "show_status" }]];
@@ -841,7 +858,19 @@ EOF
     fi
 
     # 激活 workers.dev 路由
-    log_info "正在发布 Worker 到 workers.dev 子域名..."
+    # 4. 刷新机器人菜单
+    log_info "正在刷新机器人交互菜单..."
+    local menu_payload='{"commands": [
+        {"command": "menu", "description": "🏰 打开主控制台"},
+        {"command": "status", "description": "📊 节点看板"},
+        {"command": "stats", "description": "📈 数据罗盘"},
+        {"command": "help", "description": "💡 向导说明"}
+    ]}'
+    curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/setMyCommands" \
+        -H "Content-Type: application/json" \
+        -d "$menu_payload" > /dev/null
+
+    log_info "正在开启发布 Worker 到 workers.dev 子域名..."
     cf_api POST "/workers/scripts/autovpn-relay/subdomain" '{"enabled": true}' > /dev/null || return 1
 
     # 获取并校验 subdomain
