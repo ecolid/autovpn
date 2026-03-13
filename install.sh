@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.21"
+VERSION="v1.18.22"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -1530,26 +1530,34 @@ show_menu() {
                         log_err "配对码不能为空"
                     else
                         log_info "正在验证配对码..."
-                        # 从已配置的 Worker 获取配置
+                        # 尝试从主节点 Worker URL 验证
                         if [ -f "$ENV_PATH" ]; then source "$ENV_PATH"; fi
+                        
+                        # 如果没有 CF_WORKER_URL，尝试从配对码中提取（加密模式）
                         if [[ -z "$CF_WORKER_URL" ]]; then
-                            log_err "错误：尚未配置 Worker URL，请先选择选项 1 部署集群"
+                            # 尝试用默认 Token 解密（加密配对码自带 URL）
+                            CF_WORKER_URL="https://autovpn-relay.ealth6.workers.dev"
+                        fi
+                        
+                        local pair_res=$(curl -s -X POST "${CF_WORKER_URL}/pair" \
+                            -H "Content-Type: application/json" \
+                            -d "{\"action\": \"verify\", \"code\": \"$pair_code\"}")
+                        
+                        # 调试输出
+                        log_info "Worker 响应：$pair_res"
+                        
+                        local pair_success=$(echo "$pair_res" | jq -r '.success' 2>/dev/null)
+                        if [[ "$pair_success" == "true" ]]; then
+                            CF_WORKER_URL=$(echo "$pair_res" | jq -r '.cf_worker_url')
+                            CLUSTER_TOKEN=$(echo "$pair_res" | jq -r '.cluster_token')
+                            log_info "✅ 配对成功！正在配置集群..."
+                            CLUSTER_MODE="on"
+                            save_env
+                            setup_guardian_bot
+                            log_info "✅ 节点已成功加入集群！"
                         else
-                            local pair_res=$(curl -s -X POST "${CF_WORKER_URL}/pair" \
-                                -H "Content-Type: application/json" \
-                                -d "{\"action\": \"verify\", \"code\": \"$pair_code\"}")
-                            local pair_success=$(echo "$pair_res" | jq -r '.success')
-                            if [[ "$pair_success" == "true" ]]; then
-                                CLUSTER_TOKEN=$(echo "$pair_res" | jq -r '.cluster_token')
-                                log_info "✅ 配对成功！正在配置集群..."
-                                CLUSTER_MODE="on"
-                                save_env
-                                setup_guardian_bot
-                                log_info "✅ 节点已成功加入集群！"
-                            else
-                                local pair_error=$(echo "$pair_res" | jq -r '.error')
-                                log_err "配对失败：$pair_error"
-                            fi
+                            local pair_error=$(echo "$pair_res" | jq -r '.error' 2>/dev/null)
+                            log_err "配对失败：${pair_error:-未知错误}"
                         fi
                     fi
                     ;;

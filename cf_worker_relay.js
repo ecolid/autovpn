@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.17";
+const VERSION = "v1.18.22";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -118,12 +118,6 @@ export default {
                 }
                 
                 // 返回集群配置
-                return new Response(JSON.stringify({ 
-                    success: true, 
-                    cf_worker_url: data.url,
-                    cluster_token: data.token
-                }));
-                
                 return new Response(JSON.stringify({ 
                     success: true, 
                     cf_worker_url: data.url,
