@@ -546,6 +546,8 @@ export default {
             } catch (e) { return new Response(e.message, { status: 200 }); }
         }
 
+        const token = request.headers.get("X-Cluster-Token");
+        const dbToken = await getConfig(env, "CLUSTER_TOKEN");
         if (token !== CLUSTER_TOKEN && token !== dbToken) return new Response("Unauthorized", { status: 403 });
 
         if (url.pathname === "/report" && request.method === "POST") {
