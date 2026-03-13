@@ -14,7 +14,9 @@ function generatePairCode() {
     }
     return code;
 }
-        const url = new URL(request.url);
+
+async function fetch(request, env) {
+    const url = new URL(request.url);
 
         if (request.method === "POST" && url.pathname === "/webhook") {
             try {
