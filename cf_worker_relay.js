@@ -468,19 +468,25 @@ async function handleTelegramUpdate(update, env) {
 
     if (cbData === "generate_pair") {
         try {
-            // 直接在 D1 生成配对码
-            const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-            const expire = Date.now() + 300000; // 5 分钟
+            const cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
+            const clusterToken = await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN;
             
-            await env.DB.prepare("INSERT INTO pair_codes (code, cluster_token, expire_at) VALUES (?, ?, ?)")
-                .bind(code, CLUSTER_TOKEN, expire).run();
+            // 生成加密配对码（包含 URL + Token + 过期时间）
+            const data = {
+                url: cfWorkerUrl,
+                token: clusterToken,
+                expire: Date.now() + 300000 // 5 分钟
+            };
+            const code = encrypt(data, CLUSTER_TOKEN);
             
-            await sendTelegram(BOT_TOKEN, CHAT_ID, `🔗 <b>配对码已生成!</b>\n\n配对码：<code>${code}</code>\n有效期：5 分钟\n\n�� <b>使用方式:</b>\n\n在新 VPS 执行 <code>autovpn</code>\n选择 <b>8 - 2</b> 输入配对码即可`);
+            const joinInfo = `🔗 <b>配对码已生成!</b>\n\n配对码 (5 分钟有效):\n<code>${code}</code>\n\n📋 <b>使用方式:</b>\n\n在新 VPS 执行:\n<code>autovpn</code>\n选择 <b>8 - 2</b>\n粘贴上方配对码即可`;
+            await sendTelegram(BOT_TOKEN, CHAT_ID, joinInfo);
         } catch (e) {
             await sendTelegram(BOT_TOKEN, CHAT_ID, `❌ 生成失败：${e.message}`);
         }
         return new Response("OK");
     }
+
 
 
     // 3. Rescue logic
