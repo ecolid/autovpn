@@ -3,7 +3,7 @@
  */
 
 const CLUSTER_TOKEN = "your_private_token_here";
-const VERSION = "v1.18.2";
+const VERSION = "v1.18.3";
 const PAIR_CODE_EXPIRE = 300;
 
 function generatePairCode() {
@@ -642,3 +642,5 @@ function drawSparkline(arr) {
     const range = max - min || 1;
     return arr.map(v => chars[Math.floor(((v - min) / range) * (chars.length - 1))]).join("");
 }
+
+export default { fetch, scheduled };
