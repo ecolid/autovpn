@@ -1,8 +1,8 @@
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.14.4 - Resilience Patch)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.15.0 - Autonomous Sync)
 # =================================================================
 
-VERSION="v1.14.4"
+VERSION="v1.15.0"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -462,7 +462,7 @@ deploy_cf_worker() {
         echo -e "   - 点击 '创建令牌' -> 使用 '编辑 Cloudflare Workers' 模板。"
         [ ! -z "$CF_API_TOKEN" ] && echo -e "   - 当前记录: ${CYAN}${CF_API_TOKEN:0:6}******${PLAIN}"
         read -p "请输入 Cloudflare API Token: " INPUT_API_TOKEN
-        CF_API_TOKEN="${INPUT_API_TOKEN:-$INPUT_API_TOKEN}" # Fix: Use INPUT_API_TOKEN if CF_API_TOKEN is empty
+        CF_API_TOKEN="${INPUT_API_TOKEN:-$CF_API_TOKEN}"
     fi
     
     if [[ -z "$CF_ACCOUNT_ID" || -z "$CF_API_TOKEN" ]]; then
@@ -503,7 +503,10 @@ deploy_cf_worker() {
     CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, val TEXT); 
     INSERT OR REPLACE INTO config (key, val) VALUES ('BOT_TOKEN', '$TG_BOT_TOKEN'); 
     INSERT OR REPLACE INTO config (key, val) VALUES ('CHAT_ID', '$TG_CHAT_ID'); 
-    INSERT OR REPLACE INTO config (key, val) VALUES ('CF_TOKEN', '$CF_API_TOKEN');"
+    INSERT OR REPLACE INTO config (key, val) VALUES ('CF_TOKEN', '$CF_API_TOKEN');
+    INSERT OR REPLACE INTO config (key, val) VALUES ('CF_ACCOUNT', '$CF_ACCOUNT_ID');
+    INSERT OR REPLACE INTO config (key, val) VALUES ('D1_ID', '$d1_id');
+    INSERT OR REPLACE INTO config (key, val) VALUES ('CLUSTER_TOKEN', '${CLUSTER_TOKEN:-$LOCAL_TOKEN}');"
     local payload=$(jq -n --arg sql "$sql_init" '{"sql": $sql}')
     cf_api POST "/d1/database/${d1_id}/query" "$payload" > /dev/null || return 1
 

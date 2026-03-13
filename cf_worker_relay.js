@@ -4,7 +4,7 @@
  */
 
 const CLUSTER_TOKEN = "your_private_token_here";
-const VERSION = "1.14.4";
+const VERSION = "1.15.0";
 
 export default {
     async fetch(request, env) {
@@ -18,7 +18,8 @@ export default {
         }
 
         const token = request.headers.get("X-Cluster-Token");
-        if (token !== CLUSTER_TOKEN) return new Response("Unauthorized", { status: 403 });
+        const dbToken = await getConfig(env, "CLUSTER_TOKEN");
+        if (token !== CLUSTER_TOKEN && token !== dbToken) return new Response("Unauthorized", { status: 403 });
 
         if (url.pathname === "/report" && request.method === "POST") {
             const data = await request.json();
@@ -248,11 +249,15 @@ async function handleTelegramUpdate(update, env) {
         info += prv ? "✅ 🔒 <b>云端保险箱 (Stateless Mode)</b>\n" : "⚠️ 🔌 <b>本地存储 (Legacy Mode)</b>\n";
         info += "💡 <i>状态：v1.14.0 后私钥不再驻留 VPS 硬盘。</i>\n\n";
 
+        info += "⚙️ <b>指挥部维养 (Internal):</b>\n";
+        info += "💡 <i>功能：无需 VPS 中放，在此一键静默升级机器人。</i>\n\n";
+
         info += "⚠️ <b>注意：</b> 若怀疑泄漏，请立即执行彻底轮换。";
 
         const btns = [
+            [{ text: "🔄 升级指挥部 (Self-Update)", callback_data: "self_update_worker" }],
             [{ text: "➕ 获取一键加入指令", callback_data: "join_cmd" }],
-            [{ text: "🔄 彻底轮换并同步云端", callback_data: "rotate_ssh" }],
+            [{ text: "🔄 轮换 SSH 密钥", callback_data: "rotate_ssh" }],
             [{ text: "🔙 返回主菜单", callback_data: "show_main" }]
         ];
         await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns }, update.callback_query?.message.message_id);
@@ -265,6 +270,45 @@ async function handleTelegramUpdate(update, env) {
         const info = `📋 <b>一键加入集群指令</b>\n\n在新服务器执行下方命令即可上线：\n\n<code>${cmd}</code>\n\n💡 <i>提示：该指令包含中枢认证 Token。</i>`;
         const btns = [[{ text: "🔙 返回安全中心延时", callback_data: "show_security" }]];
         await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns }, msg.message_id);
+        return new Response("OK");
+    }
+
+    if (cbData === "self_update_worker") {
+        const token = await getConfig(env, "CF_TOKEN");
+        const account = await getConfig(env, "CF_ACCOUNT");
+        const d1Id = await getConfig(env, "D1_ID");
+        if (!token || !account || !d1Id) return await sendTelegram(BOT_TOKEN, CHAT_ID, "❌ 错误: 云端配置缺失 (CF_TOKEN/ACCOUNT/D1_ID)，请先在 VPS 跑一次 8-2 同步信息。");
+
+        const statusMsg = await sendTelegram(BOT_TOKEN, CHAT_ID, "🔄 <b>指挥部进化启动</b>\n正在从 GitHub 拉取最新代码...");
+        try {
+            const res = await fetch("https://raw.githubusercontent.com/ecolid/autovpn/main/cf_worker_relay.js");
+            let code = await res.text();
+
+            // 保持版本兼容性：注入当前的 CLUSTER_TOKEN
+            const clusterToken = await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN;
+            code = code.replace(/const CLUSTER_TOKEN = ".*";/, `const CLUSTER_TOKEN = "${clusterToken}";`);
+
+            // 构造上传 Payload (Multipart)
+            const formData = new FormData();
+            const metadata = { main_module: "index.js", bindings: [{ type: "d1", name: "DB", id: d1Id }] };
+            formData.append("metadata", JSON.stringify(metadata));
+            formData.append("index.js", new Blob([code], { type: "application/javascript+module" }), "index.js");
+
+            const cfRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/autovpn-relay`, {
+                method: "PUT",
+                headers: { "Authorization": `Bearer ${token}` },
+                body: formData
+            });
+
+            const cfData = await cfRes.json();
+            if (cfData.success) {
+                await sendTelegram(BOT_TOKEN, CHAT_ID, "✅ <b>指挥部进化成功！</b>\nv1.15.0 脉冲自对齐已完成更新。");
+            } else {
+                await sendTelegram(BOT_TOKEN, CHAT_ID, `❌ <b>进化失败: CF API 拒绝</b>\n<pre>${JSON.stringify(cfData.errors)}</pre>`);
+            }
+        } catch (e) {
+            await sendTelegram(BOT_TOKEN, CHAT_ID, `❌ <b>进化失败: 致命错误</b>\n${e.message}`);
+        }
         return new Response("OK");
     }
 
