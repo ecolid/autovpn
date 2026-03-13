@@ -4,6 +4,16 @@
 
 const CLUSTER_TOKEN = "your_private_token_here";
 const VERSION = "v1.18.1";
+const PAIR_CODE_EXPIRE = 300;
+
+function generatePairCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = '';
+    for (let i = 0; i < 6; i++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return code;
+}
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
