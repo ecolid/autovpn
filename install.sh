@@ -1,8 +1,8 @@
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.14.2 - Stateless Security)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.14.4 - Resilience Patch)
 # =================================================================
 
-VERSION="v1.14.2"
+VERSION="v1.14.4"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -1216,7 +1216,7 @@ setup_guardian_bot() {
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, statistics, sys, socket
 
-VERSION = "1.14.2"
+VERSION = "1.14.4"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
 
@@ -1355,10 +1355,17 @@ def main():
                     elif task["cmd"] == "SELF_UPDATE":
                         res = run_shell("wget -qO /tmp/install.sh https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh && bash /tmp/install.sh --update-bot --silent")
                     else:
-                        # [v1.14.2] 增强路径弹性：优先使用绝对路径，其次尝试 PATH
+                        # [v1.14.4] 终极弹性执行：不再盲目加 bash。
+                        # 如果没有绝对路径，直接尝试环境变量中的 autovpn
                         targets = ["/usr/local/etc/autovpn/install.sh", "/usr/local/bin/autovpn"]
                         target = next((t for t in targets if os.path.exists(t)), "autovpn")
-                        res = run_shell(f"bash {target} {task['cmd']}")
+                        
+                        if target.startswith("/"):
+                            # 如果是文件路径，使用 bash 执行
+                            res = run_shell(f"bash {target} {task['cmd']}")
+                        else:
+                            # 否则直接执行 (依赖容器/系统 PATH)
+                            res = run_shell(f"{target} {task['cmd']}")
                     requests.post(f"{cf_url}/report", json=get_status_data(tid=task['task_id'], res=res), 
                                  headers={"X-Cluster-Token": c_token}, timeout=10)
         except: pass

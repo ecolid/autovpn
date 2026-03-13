@@ -4,7 +4,7 @@
  */
 
 const CLUSTER_TOKEN = "your_private_token_here";
-const VERSION = "1.14.3";
+const VERSION = "1.14.4";
 
 export default {
     async fetch(request, env) {
