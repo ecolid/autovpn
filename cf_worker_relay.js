@@ -3,7 +3,7 @@
  */
 
 const CLUSTER_TOKEN = "your_private_token_here";
-const VERSION = "v1.18.4";
+const VERSION = "v1.18.5";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -29,6 +29,19 @@ export default {
         const token = request.headers.get("X-Cluster-Token");
         const dbToken = await getConfig(env, "CLUSTER_TOKEN");
         if (token !== CLUSTER_TOKEN && token !== dbToken) return new Response("Unauthorized", { status: 403 });
+
+        // 保存配置接口
+        if (url.pathname.startsWith("/config/") && request.method === "PUT") {
+            const key = url.pathname.split("/")[2];
+            const body = await request.json();
+            const { value } = body;
+            try {
+                await env.DB.prepare("INSERT OR REPLACE INTO config (key, val) VALUES (?, ?)").bind(key, value).run();
+                return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } });
+            } catch (e) {
+                return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+            }
+        }
 
         // 配对码接口
         if (url.pathname === "/pair" && request.method === "POST") {

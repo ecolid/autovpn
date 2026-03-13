@@ -569,6 +569,13 @@ EOF
     done
 
     CF_WORKER_URL="https://autovpn-relay.${subdomain}.workers.dev"
+    
+    # 保存 Worker URL 到 D1 数据库
+    curl -s -X PUT "${CF_WORKER_URL}/config/CF_WORKER_URL" \
+        -H "X-Cluster-Token: ${CLUSTER_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "{\"value\": \"${CF_WORKER_URL}\"}" > /dev/null
+    
     curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/setWebhook" -d "url=${CF_WORKER_URL}/webhook" > /dev/null
     
     # 发送就绪确认
