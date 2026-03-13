@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.4"
+VERSION="v1.18.5"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -1505,7 +1505,8 @@ show_menu() {
             case $maint_choice in
                 1) update_script ;;
                 2) uninstall_all; exit 0 ;;
-                *) continue ;;
+                0) ;;
+                *) log_err "无效输入"; sleep 1 ;;
             esac
             ;;
         0) exit 0 ;;
