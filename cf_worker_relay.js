@@ -1,9 +1,9 @@
 /**
- * Cloudflare Worker for AutoVPN Guardian Cluster (v1.16.0 - Autonomous Sync)
+ * Cloudflare Worker for AutoVPN Guardian Cluster (v1.17.0 - Smart Polling)
  */
 
 const CLUSTER_TOKEN = "your_private_token_here";
-const VERSION = "v1.16.0";
+const VERSION = "v1.17.0";
 
 export default {
     async fetch(request, env) {

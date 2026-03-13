@@ -1,8 +1,7 @@
-# =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.16.0 - Autonomous Sync)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.17.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.16.0"
+VERSION="v1.17.0"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -530,7 +529,7 @@ deploy_cf_worker() {
     log_info "正在上传并绑定 Worker 脚本..."
     cat > /tmp/worker.js <<'EOF_JS'
 /**
- * Cloudflare Worker for AutoVPN Guardian Cluster (v1.16.0 - Autonomous Sync)
+ * Cloudflare Worker for AutoVPN Guardian Cluster (v1.17.0 - Smart Polling)
  */
 
 const CLUSTER_TOKEN = "your_private_token_here";
@@ -1848,7 +1847,7 @@ show_menu() {
     clear
     echo -e "${CYAN}==========================================================${PLAIN}"
     echo -e "   🚀 ${BLUE}AutoVPN Master Controller${PLAIN} - ${YELLOW}${VERSION}${PLAIN}"
-    echo -e "   状态: ${GREEN}稳定${PLAIN} | 核心: ${MAGENTA}Xray v1.16.0${PLAIN}"
+    echo -e "   状态: ${GREEN}稳定${PLAIN} | 核心: ${MAGENTA}Xray v1.17.0${PLAIN}"
     echo -e "${CYAN}==========================================================${PLAIN}"
     echo ""
 
