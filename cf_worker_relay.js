@@ -200,7 +200,7 @@ async function handleTelegramUpdate(update, env) {
     const text = update.message ? update.message.text : null;
     const cbData = update.callback_query ? update.callback_query.data : null;
 
-    if (text === "/start" || cbData === "show_main") {
+    if (text === "/start" || text === "/menu" || cbData === "show_main") {
         const welcome = `🏰 <b>AutoVPN 守护者集群控制台 (v${VERSION})</b>\n\n请选择操作模块:`;
         const btns = [
             [{ text: "📊 节点看板 (全维度)", callback_data: "show_status" }],
