@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.26"
+VERSION="v1.18.27"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -1575,22 +1575,28 @@ show_menu() {
                         
                         local pair_success=$(echo "$pair_res" | jq -r '.success' 2>/dev/null)
                         if [[ "$pair_success" == "true" ]]; then
+                            NODE_ID=$(echo "$pair_res" | jq -r '.node_id')
                             CF_WORKER_URL=$(echo "$pair_res" | jq -r '.cf_worker_url')
                             CLUSTER_TOKEN=$(echo "$pair_res" | jq -r '.cluster_token')
-                            log_info "✅ 配对成功！正在配置集群..."
+                            local reg_message=$(echo "$pair_res" | jq -r '.message')
+                            
+                            log_info "✅ 配对成功！$reg_message"
+                            log_info "📋 节点信息："
+                            log_info "  节点 ID: $NODE_ID"
+                            log_info "  Worker: $CF_WORKER_URL"
+                            
                             CLUSTER_MODE="on"
                             save_env
                             
-                            # 提示用户需要在主节点配置完整信息
-                            log_info "⚠️ 注意：配对模式仅同步了 Worker URL 和 Token"
-                            log_info "如需完整功能（Bot 通知、Worker 更新），请在主节点执行："
-                            log_info "  autovpn -> 8-1 (配置集群)"
-                            log_info "然后在此节点执行："
-                            log_info "  autovpn -> 8-3 (刷新本地守护进程)"
-                            read -p "按回车键继续..."
+                            # 配置 Guardian 服务（从 Worker 获取 SSH 公钥）
+                            setup_guardian_bot
+                            
+                            log_info "✅ 集群配置完成！节点已开始汇报状态"
+                            read -p "按回车键返回菜单..."
                         else
                             local pair_error=$(echo "$pair_res" | jq -r '.error' 2>/dev/null)
-                            log_err "配对失败：${pair_error:-未知错误}"
+                            log_err "配对失败：$pair_error"
+                            read -p "按回车键返回菜单..."
                         fi
                     fi
                     ;;

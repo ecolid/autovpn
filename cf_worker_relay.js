@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.26";
+const VERSION = "v1.18.27";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -118,11 +118,32 @@ export default {
                     return new Response(JSON.stringify({ success: false, error: "配对码已过期，请重新生成" }));
                 }
                 
-                // 返回集群配置
+                // 新节点注册：生成节点 ID 并写入 D1
+                const nodeId = `node_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+                await env.DB.prepare(`
+                    INSERT INTO nodes (id, state, alert_sent, is_selected, t) 
+                    VALUES (?, 'online', 0, 1, ?)
+                `).bind(nodeId, Math.floor(Date.now() / 1000)).run();
+                
+                // 通知 Bot（如果配置了）
+                try {
+                    const BOT_TOKEN = await getConfig(env, "BOT_TOKEN");
+                    const CHAT_ID = await getConfig(env, "CHAT_ID");
+                    if (BOT_TOKEN && CHAT_ID) {
+                        await sendTelegram(BOT_TOKEN, CHAT_ID, 
+                            `🎉 <b>新节点加入集群!</b>\n节点 ID: <code>${nodeId}</code>\n已自动上线并开始汇报`);
+                    }
+                } catch (e) {
+                    // Bot 通知失败不影响注册
+                }
+                
+                // 返回集群配置给子节点
                 return new Response(JSON.stringify({ 
                     success: true, 
+                    node_id: nodeId,
                     cf_worker_url: data.url,
-                    cluster_token: data.token
+                    cluster_token: data.token,
+                    message: "✅ 注册成功！你已加入集群，请开始汇报状态"
                 }));
             }
             
