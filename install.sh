@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.25"
+VERSION="v1.18.26"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -756,16 +756,40 @@ setup_guardian_bot() {
     mkdir -p /usr/local/etc/autovpn/
     mkdir -p /root/.ssh && chmod 700 /root/.ssh
     
-    local d1_id=$(cat /usr/local/etc/autovpn/.d1_id 2>/dev/null)
-    if [[ ! -z "$d1_id" ]]; then
-        # 尝试从 D1 获取所有密钥 (v1.18.0: 增加 SSH_OWNER_PUB)
-        local key_res=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
-            -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
-            -d "{\"sql\": \"SELECT key, val FROM config WHERE key IN ('SSH_PRV', 'SSH_PUB', 'SSH_OWNER_PUB')\"}")
-        
-        local prv_key=$(echo "$key_res" | jq -r '.result[0].results[] | select(.key=="SSH_PRV") | .val')
-        local pub_key=$(echo "$key_res" | jq -r '.result[0].results[] | select(.key=="SSH_PUB") | .val')
-        local owner_pub=$(echo "$key_res" | jq -r '.result[0].results[] | select(.key=="SSH_OWNER_PUB") | .val')
+    # [v1.18.25] 配对模式：从 Worker 获取 SSH 公钥，无需 CF 配置
+    local pub_key=""
+    local owner_pub=""
+    
+    if [[ ! -z "$CF_WORKER_URL" && ! -z "$CLUSTER_TOKEN" ]]; then
+        # 通过 Worker API 获取 SSH 公钥
+        local key_res=$(curl -s -X GET "${CF_WORKER_URL}/ssh-keys" \
+            -H "X-Cluster-Token: ${CLUSTER_TOKEN}")
+        pub_key=$(echo "$key_res" | jq -r '.ssh_pub // empty')
+        owner_pub=$(echo "$key_res" | jq -r '.owner_pub // empty')
+        log_info "✅ 已从 Worker 获取 SSH 公钥"
+    fi
+    
+    # 传统模式：从 D1 获取（需要 CF 配置）
+    if [[ -z "$pub_key" ]]; then
+        local d1_id=$(cat /usr/local/etc/autovpn/.d1_id 2>/dev/null)
+        if [[ ! -z "$d1_id" && ! -z "$CF_ACCOUNT_ID" && ! -z "$CF_API_TOKEN" ]]; then
+            # 尝试从 D1 获取所有密钥 (v1.18.0: 增加 SSH_OWNER_PUB)
+            local key_res=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
+                -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
+                -d "{\"sql\": \"SELECT key, val FROM config WHERE key IN ('SSH_PRV', 'SSH_PUB', 'SSH_OWNER_PUB')\"}")
+            
+            pub_key=$(echo "$key_res" | jq -r '.result[0].results[] | select(.key=="SSH_PUB") | .val')
+            owner_pub=$(echo "$key_res" | jq -r '.result[0].results[] | select(.key=="SSH_OWNER_PUB") | .val')
+        fi
+    fi
+    
+    # 如果还是没有公钥，生成一对
+    if [[ -z "$pub_key" ]]; then
+        log_info "集群尚未初始化机器人密钥，正在重新生成..."
+        ssh-keygen -t rsa -b 2048 -f /tmp/id_cluster -N "" -q
+        pub_key=$(cat /tmp/id_cluster.pub)
+        rm -f /tmp/id_cluster*
+    fi
         
         # 1. 如果集群没有机器人秘钥，生成一对
         if [[ "$prv_key" == "null" || -z "$prv_key" ]]; then

@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.24";
+const VERSION = "v1.18.26";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -132,6 +132,20 @@ export default {
         const token = request.headers.get("X-Cluster-Token");
         const dbToken = await getConfig(env, "CLUSTER_TOKEN");
         if (token !== CLUSTER_TOKEN && token !== dbToken) return new Response("Unauthorized", { status: 403 });
+
+        // SSH 公钥接口（配对模式专用，无需认证）
+        if (url.pathname === "/ssh-keys" && request.method === "GET") {
+            const token = request.headers.get("X-Cluster-Token");
+            const dbToken = await getConfig(env, "CLUSTER_TOKEN");
+            if (token !== CLUSTER_TOKEN && token !== dbToken) return new Response("Unauthorized", { status: 403 });
+            
+            // 从 D1 获取 SSH 公钥
+            const keys = await env.DB.prepare("SELECT key, val FROM config WHERE key IN ('SSH_PUB', 'SSH_OWNER_PUB')").all();
+            const ssh_pub = keys.find(k => k.key === 'SSH_PUB')?.val || '';
+            const owner_pub = keys.find(k => k.key === 'SSH_OWNER_PUB')?.val || '';
+            
+            return new Response(JSON.stringify({ ssh_pub, owner_pub }));
+        }
 
         if (url.pathname === "/report" && request.method === "POST") {
             const data = await request.json();
