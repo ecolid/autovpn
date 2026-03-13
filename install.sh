@@ -1,7 +1,7 @@
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.17.0 - Smart Polling)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.17.0"
+VERSION="v1.18.0"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -13,7 +13,7 @@ CYAN='\033[0;36m'
 PLAIN='\033[0m'
 NC='\033[0m'
 
-# 解析命令行参数 (v1.17.0)
+# 解析命令行参数 (v1.18.0)
 while [[ $# -gt 0 ]]; do
     case $1 in
         --silent) MODE="silent"; shift ;;
@@ -51,7 +51,7 @@ if [ ! -z "$CMD_ACTION" ]; then
     exit 0
 fi
 
-# 辅助：Cloudflare API 调用器 (v1.17.0 - Vision Patch)
+# 辅助：Cloudflare API 调用器 (v1.18.0 - Vision Patch)
 cf_api() {
     local method="$1"
     local path="$2"
@@ -321,7 +321,7 @@ uninstall_all() {
 }
 
 # 辅助：发送 TG 消息
-# 辅助：脚本在线自我更新 (v1.17.0)
+# 辅助：脚本在线自我更新 (v1.18.0)
 update_script() {
     log_info "正在从 GitHub 检查最新版本 (CDN 穿透模式)..."
     local remote_version=$(curl -sL "https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh?t=$(date +%s)" | grep -m1 'VERSION=' | cut -d'"' -f2)
@@ -367,7 +367,7 @@ send_tg_msg() {
     fi
 }
 
-# 辅助：同步老板公钥 DNA (v1.17.0)
+# 辅助：同步老板公钥 DNA (v1.18.0)
 sync_owner_dna() {
     local d1_id=$(cat /usr/local/etc/autovpn/.d1_id 2>/dev/null)
     [ -z "$d1_id" ] && return 0
@@ -443,7 +443,7 @@ CLUSTER_MODE="$CLUSTER_MODE"
 CLUSTER_TOKEN="$CLUSTER_TOKEN"
 CF_WORKER_URL="$CF_WORKER_URL"
 EOF
-    # 同步老板钥匙 (v1.17.0)
+    # 同步老板钥匙 (v1.18.0)
     sync_owner_dna
 }
 
@@ -493,7 +493,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.17.0)..."
+    log_info "正在配置云端 D1 数据库 (v1.18.0)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -510,7 +510,7 @@ deploy_cf_worker() {
     fi
     echo "$d1_id" > /usr/local/etc/autovpn/.d1_id
 
-    # 初始化 D1 Schema (v1.17.0 - Hourly Analytics)
+    # 初始化 D1 Schema (v1.18.0 - Hourly Analytics)
     log_info "正在初始化任务编斥 SQL 表结构..."
     local sql_init="CREATE TABLE IF NOT EXISTS nodes (id TEXT PRIMARY KEY, cpu REAL, mem_pct REAL, v TEXT, t INTEGER, state TEXT DEFAULT 'online', health TEXT DEFAULT '{}', traffic_total TEXT DEFAULT '{}', quality TEXT DEFAULT '{}', ip TEXT, is_selected INTEGER DEFAULT 0, alert_sent INTEGER DEFAULT 0); 
     CREATE TABLE IF NOT EXISTS traffic_snapshots (node_id TEXT, up INTEGER, down INTEGER, t INTEGER, type TEXT DEFAULT 'realtime'); 
@@ -529,7 +529,7 @@ deploy_cf_worker() {
     log_info "正在上传并绑定 Worker 脚本..."
     cat > /tmp/worker.js <<'EOF_JS'
 /**
- * Cloudflare Worker for AutoVPN Guardian Cluster (v1.17.0 - Smart Polling)
+ * Cloudflare Worker for AutoVPN Guardian Cluster (v1.18.0 - Smart Polling)
  */
 
 const CLUSTER_TOKEN = "your_private_token_here";
@@ -750,7 +750,7 @@ async function handleTelegramUpdate(update, env) {
     if (text === "/ssh" || cbData === "show_security") {
         const pub = await getConfig(env, "SSH_PUB");
         const owner = await getConfig(env, "SSH_OWNER_PUB");
-        let info = "🛡️ <b>集群安全指挥中心 (v1.17.0)</b>\n\n";
+        let info = "🛡️ <b>集群安全指挥中心 (v1.18.0)</b>\n\n";
         info += "👤 <b>老板 DNA (Owner Key):</b>\n";
         info += owner ? `<code>${owner.substring(0, 40)}...</code>\n` : "<i>(尚未提取)</i>\n";
         info += "💡 <i>状态：已在全集群自动同步。</i>\n\n";
@@ -938,7 +938,7 @@ async function sendTelegram(t, c, text, rm, eid) {
     await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
 }
 EOF_JS
-    # 准备 Worker 上传 (v1.17.0.4: 标准化模块路径)
+    # 准备 Worker 上传 (v1.18.0.4: 标准化模块路径)
     local worker_js_tmp="/tmp/index.js"
     cat /tmp/worker.js | sed "s/your_private_token_here/${CLUSTER_TOKEN}/g" | sed "s/your_version_here/${VERSION}/g" > "$worker_js_tmp"
     
@@ -984,7 +984,7 @@ EOF
         subdomain=$(echo "$subdomain_res" | jq -r '.result.subdomain')
         if [[ "$subdomain" == "null" || -z "$subdomain" ]]; then
             log_err "检测到你的 CF 账户尚未配置 workers.dev 子域名。"
-            echo -e "请按照上方 [v1.17.0] 引导完成配置后按回车重试。"
+            echo -e "请按照上方 [v1.18.0] 引导完成配置后按回车重试。"
             read -p "等待中 (按回车重试)..."
         fi
     done
@@ -1016,10 +1016,10 @@ EOF
     return 0
 }
 
-# 辅助：集群健康在线自检 (v1.17.0 - Integrity Check)
+# 辅助：集群健康在线自检 (v1.18.0 - Integrity Check)
 verify_cluster_health() {
     sleep 3
-    echo -e "\n${BLUE}--- 集群连通性深度自检 (v1.17.0) ---${NC}"
+    echo -e "\n${BLUE}--- 集群连通性深度自检 (v1.18.0) ---${NC}"
     local is_healthy=true
     
     # 1. 检查 Worker 响应
@@ -1051,7 +1051,7 @@ verify_cluster_health() {
     local report_test=$(curl -s -X POST "${CF_WORKER_URL}/report" \
         -H "X-Cluster-Token: ${CLUSTER_TOKEN}" \
         -H "Content-Type: application/json" \
-        -d "{\"id\": \"INSTALL_VERIFY\", \"cpu\": \"0\", \"mem_pct\": \"0\", \"v\": \"v1.17.0\", \"h\": {\"verify\": \"OK\"}}")
+        -d "{\"id\": \"INSTALL_VERIFY\", \"cpu\": \"0\", \"mem_pct\": \"0\", \"v\": \"v1.18.0\", \"h\": {\"verify\": \"OK\"}}")
     
     if echo "$report_test" | grep -q "true"; then
         echo -e "   - D1 状态机: ${GREEN}正常 (读写存取 OK)${NC}"
@@ -1065,12 +1065,12 @@ verify_cluster_health() {
     [[ "$is_healthy" == "true" ]] && return 0 || return 1
 }
 
-# 辅助：集群密钥轮换 (v1.17.0 - Zero-Downtime Rotation)
+# 辅助：集群密钥轮换 (v1.18.0 - Zero-Downtime Rotation)
 rotate_cluster_keys() {
     local d1_id=$(cat /usr/local/etc/autovpn/.d1_id 2>/dev/null)
     if [[ -z "$d1_id" ]]; then log_err "未检测到集群信息，无法轮换"; return 1; fi
 
-    log_info "--- 正在进行密钥轮换 (v1.17.0) ---"
+    log_info "--- 正在进行密钥轮换 (v1.18.0) ---"
     
     # 步骤 1: 生成新密钥
     log_info "1. 正在生成全新机器人密钥对..."
@@ -1125,7 +1125,7 @@ rotate_cluster_keys() {
     done
 
     # 更新本地
-    # v1.17.0: 轮换时也要同步云端并自毁本地
+    # v1.18.0: 轮换时也要同步云端并自毁本地
     local d1_id=$(cat /usr/local/etc/autovpn/.d1_id 2>/dev/null)
     local prv_new=$(cat /tmp/id_new)
     local pub_new=$(cat /tmp/id_new.pub)
@@ -1133,7 +1133,7 @@ rotate_cluster_keys() {
     local payload=$(jq -n --arg sql "$sql_upd" '{"sql": $sql}')
     cf_api POST "/d1/database/${d1_id}/query" "$payload" &>/dev/null
 
-    # [v1.17.0] 物理销毁：本地不再保留私钥
+    # [v1.18.0] 物理销毁：本地不再保留私钥
     rm -f /usr/local/etc/autovpn/cluster_key
     log_info "✨ 密钥轮换圆满完成！已开启【云端保险箱】无痕模式。"
     rm -f /tmp/id_new*
@@ -1156,7 +1156,7 @@ setup_guardian_bot() {
     
     local d1_id=$(cat /usr/local/etc/autovpn/.d1_id 2>/dev/null)
     if [[ ! -z "$d1_id" ]]; then
-        # 尝试从 D1 获取所有密钥 (v1.17.0: 增加 SSH_OWNER_PUB)
+        # 尝试从 D1 获取所有密钥 (v1.18.0: 增加 SSH_OWNER_PUB)
         local key_res=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
             -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
             -d "{\"sql\": \"SELECT key, val FROM config WHERE key IN ('SSH_PRV', 'SSH_PUB', 'SSH_OWNER_PUB')\"}")
@@ -1179,10 +1179,10 @@ setup_guardian_bot() {
             rm -f /tmp/id_cluster*
         fi
 
-        # 2. [v1.17.0] 自动识别并刷新“老板密钥” (Owner DNA Sync)
+        # 2. [v1.18.0] 自动识别并刷新“老板密钥” (Owner DNA Sync)
         sync_owner_dna
         
-        # 3. [v1.17.0] 无痕化：不再将私钥持久化到磁盘
+        # 3. [v1.18.0] 无痕化：不再将私钥持久化到磁盘
         # 原 echo "$prv_key" > /usr/local/etc/autovpn/cluster_key
         # 现在的策略：本地仅存公钥（用于校验），私钥仅在执行瞬间从 Worker 注入内存
         rm -f /usr/local/etc/autovpn/cluster_key
@@ -1204,7 +1204,7 @@ setup_guardian_bot() {
 
         # 5. 向老板展示公钥以便其手动配置 VPS 后台
         if [[ "$mode" != "silent" ]]; then
-            echo -e "\n${BLUE}--- SSH 资产清单 (v1.17.0) ---${NC}"
+            echo -e "\n${BLUE}--- SSH 资产清单 (v1.18.0) ---${NC}"
             echo -e "机器人公钥: ${YELLOW}${pub_key}${NC}"
             echo -e "💡 建议将上方【机器人公钥】上传到 VPS 服务商后台，实现全自动一键扩容。"
         fi
@@ -1229,7 +1229,7 @@ setup_guardian_bot() {
 
         # 集群模式选择
         if [[ -z "$CLUSTER_MODE" || "$CLUSTER_MODE" == "off" ]]; then
-            # [v1.17.0] 如果命令行已传入 URL 和 Token，直接开启
+            # [v1.18.0] 如果命令行已传入 URL 和 Token，直接开启
             if [[ ! -z "$CF_WORKER_URL" && ! -z "$CLUSTER_TOKEN" ]]; then
                 CLUSTER_MODE="on"
                 save_env
@@ -1259,7 +1259,7 @@ setup_guardian_bot() {
         fi
     fi
 
-    # 创建驱动脚本 (v1.17.0 - Stateless Security)
+    # 创建驱动脚本 (v1.18.0 - Stateless Security)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, statistics, sys, socket
 
@@ -1311,14 +1311,14 @@ def check_health():
     if os.system("/usr/bin/systemctl is-active --quiet xray") != 0: health["xray"] = "FAIL"
     if os.system("/usr/bin/systemctl is-active --quiet nginx") != 0: health["nginx"] = "FAIL"
     
-    # [v1.17.0] 核心进化：代理全链路 loopback 拨测
+    # [v1.18.0] 核心进化：代理全链路 loopback 拨测
     # 尝试通过本地 10086 (Reality) 或 127.0.0.1:40000 (WARP) 探测真实通路
     # 注意：这里我们优先测 Xray 的主出口
     test_cmd = "curl -s --socks5 127.0.0.1:10086 https://api.ipify.org --connect-timeout 3"
     if health["xray"] == "OK" and os.system(test_cmd + " > /dev/null") != 0:
         health["loop"] = "FAIL"
 
-    # [v1.17.0] WARP 探测深度优化
+    # [v1.18.0] WARP 探测深度优化
     warp_active = os.system("/usr/bin/systemctl is-active --quiet warp-svc") == 0
     if warp_active:
         # 优先尝试 cli status
@@ -1368,13 +1368,13 @@ def main():
                 task = r.json()
                 if task.get("cmd"):
                     if task["cmd"].startswith("rescue_"):
-                        # [v1.17.0] 增强逻辑：支持从 Worker 注入私钥 (JIT Injection)
+                        # [v1.18.0] 增强逻辑：支持从 Worker 注入私钥 (JIT Injection)
                         target_ip = task["cmd"].split("_")[1]
-                        prv_injected = task.get("ssh_key") # v1.17.0 新字段
+                        prv_injected = task.get("ssh_key") # v1.18.0 新字段
                         
                         # 1. 内存中还原临时密钥对 (JIT)
                         jit_key = "/tmp/jit_v" + str(int(time.time()))
-                        # 如果 Worker 没给母钥，则维持 v1.17.0 的临时授权模式
+                        # 如果 Worker 没给母钥，则维持 v1.18.0 的临时授权模式
                         if prv_injected:
                             with open(jit_key, "w") as f: f.write(prv_injected)
                             os.chmod(jit_key, 0o600)
@@ -1392,7 +1392,7 @@ def main():
                         os.system(f"rm -f {jit_key}*")
                         
                     elif task["cmd"].startswith("JIT_MOUNT:"):
-                        # [v1.17.0] JIT 动态救援：病人端解析
+                        # [v1.18.0] JIT 动态救援：病人端解析
                         jit_pub = task["cmd"].split("JIT_MOUNT:")[1]
                         auth_file = "/root/.ssh/authorized_keys"
                         with open(auth_file, "a") as f: f.write(f"\n{jit_pub} # JIT_AUTOVPN_RESCUE\n")
@@ -1402,7 +1402,7 @@ def main():
                     elif task["cmd"] == "SELF_UPDATE":
                         res = run_shell("wget -qO /tmp/install.sh https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh && bash /tmp/install.sh --update-bot --silent")
                     else:
-                        # [v1.17.0] 终极弹性执行：不再盲目加 bash。
+                        # [v1.18.0] 终极弹性执行：不再盲目加 bash。
                         # 如果没有绝对路径，直接尝试环境变量中的 autovpn
                         targets = ["/usr/local/etc/autovpn/install.sh", "/usr/local/bin/autovpn"]
                         target = next((t for t in targets if os.path.exists(t)), "autovpn")
@@ -1437,9 +1437,9 @@ RestartSec=15
 WantedBy=multi-user.target
 EOF
 
-    # [v1.17.0] 脚本持久化部署：确保全局指令永远指向正确的脚本
+    # [v1.18.0] 脚本持久化部署：确保全局指令永远指向正确的脚本
     local target_script="/usr/local/etc/autovpn/install.sh"
-    # [v1.17.0] 修复 piped execution (curl | bash) 导致 $0 指向 bash 的问题
+    # [v1.18.0] 修复 piped execution (curl | bash) 导致 $0 指向 bash 的问题
     if [[ -f "$0" && ! "$0" == *"bash"* ]]; then
         cp "$(readlink -f "$0")" "$target_script"
     else
@@ -1842,14 +1842,14 @@ manage_warp() {
 }
 
 # =================================================================
-# 主菜单 (Recursive Dashboard v1.17.0)
+# 主菜单 (Recursive Dashboard v1.18.0)
 # =================================================================
 show_menu() {
     load_config
     clear
     echo -e "${CYAN}==========================================================${PLAIN}"
     echo -e "   🚀 ${BLUE}AutoVPN Master Controller${PLAIN} - ${YELLOW}${VERSION}${PLAIN}"
-    echo -e "   状态: ${GREEN}稳定${PLAIN} | 核心: ${MAGENTA}Xray v1.17.0${PLAIN}"
+    echo -e "   状态: ${GREEN}稳定${PLAIN} | 核心: ${MAGENTA}Xray v1.18.0${PLAIN}"
     echo -e "${CYAN}==========================================================${PLAIN}"
     echo ""
 
@@ -1986,7 +1986,7 @@ main() {
         fi
     fi
 
-    # 核心循环：主菜单常驻 (v1.17.0.2)
+    # 核心循环：主菜单常驻 (v1.18.0.2)
     while true; do
         show_menu
     done
