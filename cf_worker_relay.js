@@ -3,7 +3,7 @@
  */
 
 const CLUSTER_TOKEN = "your_private_token_here";
-const VERSION = "v1.18.11";
+const VERSION = "v1.18.12";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -17,6 +17,16 @@ function generatePairCode() {
 
 export default {
     async fetch(request, env) {
+        // 初始化配对码表
+        await env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS pair_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT UNIQUE NOT NULL,
+                cluster_token TEXT NOT NULL,
+                expire_at INTEGER NOT NULL
+            )
+        `).run();
+        
         const url = new URL(request.url);
 
         if (request.method === "POST" && url.pathname === "/webhook") {
