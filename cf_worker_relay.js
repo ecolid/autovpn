@@ -166,7 +166,7 @@ async function fetch(request, env) {
             return new Response(JSON.stringify({ ok: true }));
         }
         return new Response(`AutoVPN Orchestrator v${VERSION} Online`, { status: 200 });
-    },
+    }
 
     async scheduled(event, env) {
         const BOT_TOKEN = await getConfig(env, "BOT_TOKEN");
