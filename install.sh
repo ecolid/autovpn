@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.24"
+VERSION="v1.18.25"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -1556,8 +1556,14 @@ show_menu() {
                             log_info "✅ 配对成功！正在配置集群..."
                             CLUSTER_MODE="on"
                             save_env
-                            setup_guardian_bot
-                            log_info "✅ 节点已成功加入集群！"
+                            
+                            # 提示用户需要在主节点配置完整信息
+                            log_info "⚠️ 注意：配对模式仅同步了 Worker URL 和 Token"
+                            log_info "如需完整功能（Bot 通知、Worker 更新），请在主节点执行："
+                            log_info "  autovpn -> 8-1 (配置集群)"
+                            log_info "然后在此节点执行："
+                            log_info "  autovpn -> 8-3 (刷新本地守护进程)"
+                            read -p "按回车键继续..."
                         else
                             local pair_error=$(echo "$pair_res" | jq -r '.error' 2>/dev/null)
                             log_err "配对失败：${pair_error:-未知错误}"
