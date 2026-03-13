@@ -323,8 +323,8 @@ async function handleTelegramUpdate(update, env) {
         const btns = [
             [{ text: "🔄 升级指挥部 (Self-Update)", callback_data: "self_update_worker" }],
             [{ text: "➕ 获取一键加入指令", callback_data: "join_cmd" }],
-            [{ text: "� 生成配对码", callback_data: "generate_pair" }],
-            [{ text: "� 轮换 SSH 密钥", callback_data: "rotate_ssh" }],
+            [{ text: "🔗 生成配对码", callback_data: "generate_pair" }],
+            [{ text: "🔄 轮换 SSH 密钥", callback_data: "rotate_ssh" }],
             [{ text: "🔙 返回主菜单", callback_data: "show_main" }]
         ];
         await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns }, update.callback_query?.message.message_id);
