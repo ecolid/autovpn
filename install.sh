@@ -331,39 +331,6 @@ update_script() {
     exec ./install.sh
 }
 
-    log_info "正在从 GitHub 检查最新版本 (CDN 穿透模式)..."
-    local remote_version=$(curl -sL "https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh?t=$(date +%s)" | grep -m1 'VERSION=' | cut -d'"' -f2)
-    
-    if [[ "$remote_version" == "$VERSION" ]]; then
-        log_info "当前已是最新版本 ($VERSION)。"
-        echo -e "\n${YELLOW}💡 提示：如果 GitHub 还在同步中，您可以进入“智能轮询”模式。${PLAIN}"
-        read -p "是否进入智能轮询 (每3秒检查一次新代码)？ [y/N]: " do_poll
-        if [[ "$do_poll" =~ ^[Yy]$ ]]; then
-            log_warn "进入轮询模式... 发现更新将自动升级并重启。按 Ctrl+C 退出。"
-            while true; do
-                sleep 3
-                remote_version=$(curl -sL "https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh?t=$(date +%s)" | grep -m1 'VERSION=' | cut -d'"' -f2)
-                echo -ne "\r[$(date +%T)] 远程版本: ${CYAN}$remote_version${PLAIN} | 当前版本: ${YELLOW}$VERSION${PLAIN} ..."
-                if [[ "$remote_version" != "$VERSION" && ! -z "$remote_version" ]]; then
-                    echo ""
-                    log_warn "⚡ 监测到进化！正在自动升级至 $remote_version..."
-                    wget -N https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh && chmod +x install.sh
-                    exec ./install.sh
-                fi
-            done
-        fi
-        return 0
-    fi
-
-    log_warn "检测到新版本: $remote_version (当前 $VERSION)"
-    read -p "是否立即升级脚本？ [Y/n]: " do_update
-    if [[ ! "$do_update" =~ ^[Nn]$ ]]; then
-        wget -N https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh && chmod +x install.sh
-        log_info "✅ 脚本已进化至 $remote_version！正在重启..."
-        sleep 1
-        exec ./install.sh
-    fi
-}
 
 send_tg_msg() {
     local message="$1"
