@@ -324,6 +324,13 @@ uninstall_all() {
 # 辅助：发送 TG 消息
 # 辅助：脚本在线自我更新 (v1.18.0)
 update_script() {
+    log_info "正在从 GitHub 获取最新脚本..."
+    log_warn "强制更新脚本中..."
+    wget -q -O install.sh https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh && chmod +x install.sh
+    log_info "✅ 脚本已更新！正在重启..."
+    exec ./install.sh
+}
+
     log_info "正在从 GitHub 检查最新版本 (CDN 穿透模式)..."
     local remote_version=$(curl -sL "https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh?t=$(date +%s)" | grep -m1 'VERSION=' | cut -d'"' -f2)
     
