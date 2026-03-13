@@ -3,7 +3,7 @@
  */
 
 const CLUSTER_TOKEN = "your_private_token_here";
-const VERSION = "v1.18.9";
+const VERSION = "v1.18.11";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -185,6 +185,20 @@ export default {
     async scheduled(event, env) {
         const BOT_TOKEN = await getConfig(env, "BOT_TOKEN");
         const CHAT_ID = await getConfig(env, "CHAT_ID");
+        
+        // 初始化配对码表
+        await env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS pair_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT UNIQUE NOT NULL,
+                cluster_token TEXT NOT NULL,
+                expire_at INTEGER NOT NULL
+            )
+        `).run();
+        
+        // 清理过期配对码
+        await env.DB.prepare("DELETE FROM pair_codes WHERE expire_at < ?").bind(Date.now()).run();
+        
         if (!BOT_TOKEN || !CHAT_ID) return;
         const now = Math.floor(Date.now() / 1000);
         const nodes = await env.DB.prepare("SELECT * FROM nodes WHERE state = 'online'").all();
@@ -422,33 +436,17 @@ async function handleTelegramUpdate(update, env) {
     }
 
     if (cbData === "generate_pair") {
-        const cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
-        const clusterToken = await getConfig(env, "CLUSTER_TOKEN");
-        
-        if (!cfWorkerUrl) {
-            await sendTelegram(BOT_TOKEN, CHAT_ID, "❌ 错误：未配置集群 Worker URL，请先部署 Guardian 集群 (8-1)");
-            return new Response("OK");
-        }
-        
         try {
-            const res = await fetch(cfWorkerUrl + "/pair", {
-                method: "POST",
-                headers: { 
-                    "Content-Type": "application/json",
-                    "X-Cluster-Token": clusterToken || ""
-                },
-                body: JSON.stringify({ action: "create" })
-            });
-            const data = await res.json();
+            // 直接在 D1 生成配对码
+            const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+            const expire = Date.now() + 300000; // 5 分钟
             
-            if (data.success) {
-                const joinCmd = `autovpn\n# 选择：8 - 2\n# 输入配对码：${data.code}`;
-                await sendTelegram(BOT_TOKEN, CHAT_ID, `🔗 <b>配对码已生成!</b>\n\n配对码：<code>${data.code}</code>\n有效期：${Math.floor(data.expire / 60)} 分钟\n\n📋 <b>使用方式:</b>\n\n在新 VPS 执行:\n${joinCmd}\n\n💡 无需复制 URL 和 Token，安全便捷!`);
-            } else {
-                await sendTelegram(BOT_TOKEN, CHAT_ID, `❌ 生成失败：${data.error || '未知错误'}`);
-            }
+            await env.DB.prepare("INSERT INTO pair_codes (code, cluster_token, expire_at) VALUES (?, ?, ?)")
+                .bind(code, CLUSTER_TOKEN, expire).run();
+            
+            await sendTelegram(BOT_TOKEN, CHAT_ID, `🔗 <b>配对码已生成!</b>\n\n配对码：<code>${code}</code>\n有效期：5 分钟\n\n�� <b>使用方式:</b>\n\n在新 VPS 执行 <code>autovpn</code>\n选择 <b>8 - 2</b> 输入配对码即可`);
         } catch (e) {
-            await sendTelegram(BOT_TOKEN, CHAT_ID, `❌ 请求失败：${e.message}\n\n请检查 Worker 是否正常运行`);
+            await sendTelegram(BOT_TOKEN, CHAT_ID, `❌ 生成失败：${e.message}`);
         }
         return new Response("OK");
     }
