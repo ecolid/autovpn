@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.19"
+VERSION="v1.18.20"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -1517,7 +1517,7 @@ show_menu() {
             case $guardian_choice in
                 1) setup_guardian_bot ;;
                 2) 
-                    read -p "请输入配对码 (6 位): " pair_code
+                    read -p "请输入配对码： " pair_code
                     if [[ -z "$pair_code" ]]; then
                         log_err "配对码不能为空"
                     else
