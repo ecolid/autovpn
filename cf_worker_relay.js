@@ -3,7 +3,7 @@
  */
 
 const CLUSTER_TOKEN = "your_private_token_here";
-const VERSION = "v1.18.5";
+const VERSION = "v1.18.6";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
