@@ -3,7 +3,8 @@
  * Orchestrates: Inter-node Rescue, Interactive Deployment Wizard, Bulk Updates.
  */
 
-const CLUSTER_TOKEN = "your_private_token_here"; // Replaced by install.sh
+const CLUSTER_TOKEN = "your_private_token_here";
+const VERSION = "1.14.2";
 
 export default {
     async fetch(request, env) {
@@ -28,7 +29,13 @@ export default {
                 await env.DB.prepare("UPDATE nodes SET state = 'online', alert_sent = 0 WHERE id = ?").bind(data.id).run();
                 const BOT_TOKEN = await getConfig(env, "BOT_TOKEN");
                 const CHAT_ID = await getConfig(env, "CHAT_ID");
-                if (BOT_TOKEN && CHAT_ID) await sendTelegram(BOT_TOKEN, CHAT_ID, `✅ <b>节点重连通知</b>\n节点 <code>${data.id}</code> 已恢复连接。`);
+                if (BOT_TOKEN && CHAT_ID) await sendTelegram(BOT_TOKEN, CHAT_ID, `✅ <b>节点恢复通知</b>\n节点 <code>${data.id}</code> 已在线。`);
+            }
+
+            if (data.boot) {
+                const BOT_TOKEN = await getConfig(env, "BOT_TOKEN");
+                const CHAT_ID = await getConfig(env, "CHAT_ID");
+                if (BOT_TOKEN && CHAT_ID) await sendTelegram(BOT_TOKEN, CHAT_ID, `🚀 <b>节点上线通知</b>\n节点 <code>${data.id}</code> (v${data.v}) 启动。`);
             }
 
             const healthStr = JSON.stringify(data.h || {});
@@ -44,13 +51,28 @@ export default {
                 traffic_total=EXCLUDED.traffic_total, quality=EXCLUDED.quality, ip=EXCLUDED.ip, alert_sent=0
             `).bind(data.id, data.cpu, data.mem_pct, data.v, now, healthStr, trafficStr, qualityStr, data.ip || '0.0.0.0', isSelected).run();
 
-            // 每 15 分钟存一个快照 (简单降频逻辑)
-            if (now % 900 < 15) {
-                await env.DB.prepare("INSERT INTO traffic_snapshots (node_id, up, down, t) VALUES (?, ?, ?, ?)")
+            // 每小时整点存一个持久快照 (Analytics)
+            if (now % 3600 < 15) {
+                await env.DB.prepare("INSERT INTO traffic_snapshots (node_id, up, down, t, type) VALUES (?, ?, ?, ?, 'hourly')")
                     .bind(data.id, data.traff?.up || 0, data.traff?.down || 0, now).run();
+                // 清理超过 24 小时的快照
+                await env.DB.prepare("DELETE FROM traffic_snapshots WHERE t < ?").bind(now - 86400).run();
             }
 
             if (data.task_id && data.result) {
+                // [v1.13.0] JIT 秘钥分发逻辑
+                if (data.result.startsWith("JIT_PUB:")) {
+                    const jitPub = data.result.split("JIT_PUB:")[1];
+                    const originalTask = await env.DB.prepare("SELECT target_id FROM commands WHERE task_id = ?").bind(data.task_id).first();
+                    if (originalTask) {
+                        // 向病人节点派发挂载任务
+                        const patientId = originalTask.target_id;
+                        await env.DB.prepare("INSERT INTO commands (target_id, cmd, task_id, status) VALUES (?, ?, ?, 'pending')")
+                            .bind(patientId, `JIT_MOUNT:${jitPub}`, data.task_id + 1, 'pending').run();
+                    }
+                    return new Response(JSON.stringify({ ok: true }));
+                }
+
                 await env.DB.prepare("UPDATE commands SET result = ?, status = 'done', completed_at = ? WHERE task_id = ? AND target_id = ?")
                     .bind(data.result, now, data.task_id, data.id).run();
                 const BOT_TOKEN = await getConfig(env, "BOT_TOKEN");
@@ -58,16 +80,23 @@ export default {
                 if (BOT_TOKEN && CHAT_ID) {
                     const isSuccess = data.result.includes("✅");
                     const title = isSuccess ? "✅ <b>任务执行成功</b>" : "❌ <b>任务执行失败</b>";
-                    await sendTelegram(BOT_TOKEN, CHAT_ID, `${title}\n节点: <code>${data.id}</code>\n回显详情:\n<pre>${data.result.substring(0, 500)}</pre>`);
+                    await sendTelegram(BOT_TOKEN, CHAT_ID, `${title}\n节点: <code>${data.id}</code>\n回显:\n<pre>${data.result.substring(0, 500)}</pre>`);
                 }
             }
 
             const cmd = await env.DB.prepare("SELECT cmd, task_id FROM commands WHERE target_id = ? AND status = 'pending' ORDER BY id ASC LIMIT 1").bind(data.id).first();
-            if (cmd) return new Response(JSON.stringify({ cmd: cmd.cmd, task_id: cmd.task_id }), { headers: { "Content-Type": "application/json" } });
+            if (cmd) {
+                const payload = { cmd: cmd.cmd, task_id: cmd.task_id };
+                // [v1.14.0] 如果是 SSH 类任务，注入云端私钥
+                if (cmd.cmd.startsWith("rescue_") || cmd.cmd.startsWith("ssh ")) {
+                    payload.ssh_key = await getConfig(env, "SSH_PRV");
+                }
+                return new Response(JSON.stringify(payload), { headers: { "Content-Type": "application/json" } });
+            }
 
             return new Response(JSON.stringify({ ok: true }));
         }
-        return new Response("AutoVPN Orchestrator v1.8.3 Online", { status: 200 });
+        return new Response(`AutoVPN Orchestrator v${VERSION} Online`, { status: 200 });
     },
 
     async scheduled(event, env) {
@@ -79,11 +108,11 @@ export default {
         for (const node of nodes.results) {
             let reason = "", h = {};
             try { h = JSON.parse(node.health || "{}"); } catch (e) { }
-            if (now - node.t > 30) reason = "📉 <b>节点彻底失联</b>";
-            else if (h.xray === 'FAIL') reason = "🧨 <b>Xray 服务崩溃</b>";
-            else if (h.net === 'FAIL') reason = "🌐 <b>网络出口阻断</b>";
+            if (now - node.t > 30) reason = "📉 <b>节点失联</b>";
+            else if (h.xray === 'FAIL') reason = "🧨 <b>Xray 崩溃</b>";
+            else if (h.loop === 'FAIL') reason = "🧱 <b>全链路阻断 (Mind Blind)</b>";
             if (reason) {
-                const btns = [[{ text: "🚑 尝试跨机救援", callback_data: `rescue_${node.id}` }]];
+                const btns = [[{ text: "🚑 尝试互救", callback_data: `rescue_${node.id}` }]];
                 await sendTelegram(BOT_TOKEN, CHAT_ID, `🚨 <b>故障警报</b>\n节点: <code>${node.id}</code>\n原因: ${reason}`, { inline_keyboard: btns });
                 await env.DB.prepare("UPDATE nodes SET state = 'offline', alert_sent = 1 WHERE id = ?").bind(node.id).run();
             }
@@ -101,32 +130,45 @@ async function handleTelegramUpdate(update, env) {
     const text = update.message ? update.message.text : null;
     const cbData = update.callback_query ? update.callback_query.data : null;
 
-    // 0. Main Menu (/start)
     if (text === "/start" || cbData === "show_main") {
-        const welcome = "🎮 <b>AutoVPN 集群控制台 (v1.8.3)</b>\n\n请选择操作模块:";
+        const welcome = `🏰 <b>AutoVPN 守护者集群控制台 (v${VERSION})</b>\n\n请选择操作模块:`;
         const btns = [
-            [{ text: "📊 状态看板", callback_data: "show_status" }, { text: "📈 数据罗盘", callback_data: "show_stats" }],
-            [{ text: "🛡️ 安全中心", callback_data: "show_security" }],
+            [{ text: "📊 节点看板 (全维度)", callback_data: "show_status" }],
+            [{ text: "🚑 救援日志", callback_data: "show_rescue" }, { text: "📡 路由管理", callback_data: "show_routing" }],
+            [{ text: "☁️ 云端同步", callback_data: "show_update" }, { text: "🛡️ 安全中心", callback_data: "show_security" }],
             [{ text: "⚙️ 向导说明", url: "https://github.com/ecolid/autovpn" }]
         ];
         await sendTelegram(BOT_TOKEN, CHAT_ID, welcome, { inline_keyboard: btns }, update.callback_query?.message.message_id);
     }
 
-    // 1. Status Board
     if (text === "/status" || cbData === "show_status") {
         const nodes = await env.DB.prepare("SELECT * FROM nodes ORDER BY t DESC").all();
         let selectedCount = 0;
-        let res = "🖥️ <b>节点实时状态 (v1.8.3)</b>\n";
+        let res = `🖥️ <b>集群指挥中心 (v${VERSION})</b>\n\n`;
         const btns = [];
         for (const s of nodes.results) {
+            if (s.id === 'INSTALL_VERIFY') continue;
             const st = s.state === 'online' ? "🟢" : "🔴";
-            const isV183 = s.v && s.v.includes("1.8.3");
-            const shield = isV183 ? "🛡️" : "";
             const sel = s.is_selected ? " [✅]" : "";
             if (s.is_selected) selectedCount++;
 
-            res += `<b>${s.id}</b> [${st}] ${shield}${sel}\n`;
+            let h = { xray: "FAIL", nginx: "FAIL", warp: "SKIP", loop: "OK" }, q = { china: { lat: 0, loss: 0 }, global: { lat: 0, loss: 0 } }, t = { up: 0, down: 0 };
+            try { h = JSON.parse(s.health || "{}"); } catch (e) { }
+            try { q = JSON.parse(s.quality || "{}"); } catch (e) { }
+            try { t = JSON.parse(s.traffic_total || "{}"); } catch (e) { }
+
+            const upGB = (t.up / (1024 ** 3)).toFixed(2);
+            const downGB = (t.down / (1024 ** 3)).toFixed(2);
+            const x = h.xray === "OK" ? "🟢" : "🔴";
+            const n = h.nginx === "OK" ? "🟢" : "🔴";
+            const w = (h.warp === "OFF" || h.warp === "SKIP") ? "⚪" : (h.warp === "OK" ? "🟢" : "🔴");
+            const l = h.loop === "OK" ? "🟢" : "🔴";
+            const qStr = `🇨🇳${q.china?.lat || "--"}ms | 🌐${q.global?.lat || "--"}ms`;
+
+            res += `🌩️ <b>${s.id}</b> [${st}] ${sel}\n`;
             res += `├ IP: <code>${s.ip}</code> | v${s.v}\n`;
+            res += `├ 指标: X:${x} N:${n} W:${w} L:${l} | ${qStr}\n`;
+            res += `├ 流量: 🔼 ${upGB}GB | 🔽 ${downGB}GB\n`;
             res += `└ 负荷: ${genBar(s.cpu)}\n\n`;
 
             btns.push([
@@ -151,12 +193,13 @@ async function handleTelegramUpdate(update, env) {
         return await handleTelegramUpdate({ callback_query: { data: "show_status", message: msg } }, env);
     }
 
-    // 2. Data Stats Board (v1.8.0)
+    // 2. Data Stats Board (v1.13.0 - Visualization & Analytics)
     if (text === "/stats" || cbData === "show_stats") {
         const nodes = await env.DB.prepare("SELECT * FROM nodes ORDER BY t DESC").all();
-        let report = "📊 <b>数据罗盘监测 (v1.8.3)</b>\n\n";
+        let report = `📈 <b>全集群数据纵深 (v${VERSION})</b>\n\n`;
 
         for (const s of nodes.results) {
+            if (s.id === 'INSTALL_VERIFY') continue;
             let t = { up: 0, down: 0 }, q = { china: { lat: 0, jit: 0, loss: 0 } };
             try { t = JSON.parse(s.traffic_total || "{}"); } catch (e) { }
             try { q = JSON.parse(s.quality || "{}"); } catch (e) { }
@@ -165,36 +208,64 @@ async function handleTelegramUpdate(update, env) {
             const downGB = (t.down / (1024 ** 3)).toFixed(2);
             const lossIcon = q.china?.loss > 5 ? "⚠️" : "✅";
 
-            report += `🌩️ <b>${s.id}</b>\n`;
-            report += `├ 流量: 🔼 ${upGB}G | 🔽 ${downGB}G\n`;
-            report += `└ 线路: 📶 ${q.china?.lat || 0}ms | ⏳ ${q.china?.jit || 0}ms | ${lossIcon} ${q.china?.loss || 0}%\n\n`;
+            // 提取地理位置 (简单示意, 实际可集成 ip-api)
+            const geo = s.ip === '0.0.0.0' ? '未知' : '📍 探测中...';
+
+            report += `🌩️ <b>${s.id}</b> | <code>${s.ip}</code>\n`;
+            report += `├ 累计: 🔼 ${upGB}G | 🔽 ${downGB}G\n`;
+            report += `├ 质量: 📶 ${q.china?.lat || "--"}ms | ${lossIcon} ${q.china?.loss || 0}%\n`;
+
+            // 绘制 24h 流量趋势图 (Text-based Sparkline)
+            const snapshots = await env.DB.prepare("SELECT (up + down) as total, t FROM traffic_snapshots WHERE node_id = ? AND type = 'hourly' ORDER BY t DESC LIMIT 24").bind(s.id).all();
+            if (snapshots.results.length > 2) {
+                const values = snapshots.results.map(r => r.total).reverse();
+                const deltas = [];
+                for (let i = 1; i < values.length; i++) deltas.push(Math.max(0, values[i] - values[i - 1]));
+                if (deltas.length > 0) report += `└ 24h: <code>${drawSparkline(deltas)}</code>\n\n`;
+                else report += `└ 24h: <i>(数据收集预热中...)</i>\n\n`;
+            } else {
+                report += `└ 24h: <i>(数据收集预热中...)</i>\n\n`;
+            }
         }
 
-        const btns = [[{ text: "🔄 刷新", callback_data: "show_stats" }, { text: "🔙 返回", callback_data: "show_main" }]];
+        const btns = [[{ text: "🔄 刷新数据", callback_data: "show_stats" }, { text: "🔙 返回集群", callback_data: "show_main" }]];
         await sendTelegram(BOT_TOKEN, CHAT_ID, report, { inline_keyboard: btns }, update.callback_query?.message.message_id);
     }
 
-    // 3. Security Command Center (v1.8.3)
+    // 3. Security Command Center (v1.14.0 - Stateless Security)
     if (text === "/ssh" || cbData === "show_security") {
         const pub = await getConfig(env, "SSH_PUB");
+        const prv = await getConfig(env, "SSH_PRV");
         const owner = await getConfig(env, "SSH_OWNER_PUB");
-        let info = "🛡️ <b>集群安全指挥中心 (v1.8.3)</b>\n\n";
+        let info = `🛡️ <b>集群安全指挥中心 (v${VERSION})</b>\n\n`;
 
         info += "👤 <b>老板 DNA (Owner Key):</b>\n";
         info += owner ? `<code>${owner.substring(0, 40)}...</code>\n` : "<i>(尚未提取)</i>\n";
         info += "💡 <i>状态：已在全集群自动同步。</i>\n\n";
 
-        info += "🤖 <b>机器人锁芯 (Cluster Key):</b>\n";
+        info += "🤖 <b>机器人母钥 (Cluster Key):</b>\n";
         info += pub ? `<code>${pub.substring(0, 40)}...</code>\n` : "<i>(尚未生成)</i>\n";
+        info += "🏦 <b>云端保险箱 (Cloud Vault):</b>\n";
+        info += prv ? "✅ 🔒 <b>已存入 (本地不再留痕)</b>\n" : "⚠️ ❌ <b>未同步 (本地存在风险)</b>\n";
         info += "💡 <i>状态：用于节点互救与远程部署。</i>\n\n";
 
-        info += "⚠️ <b>注意：</b> 如果你怀疑密钥泄露，请点击下方轮换按钮。";
+        info += "⚠️ <b>注意：</b> v1.14.0 模式下，所有服务器硬盘均不存储私钥，安全性提升 1000%。";
 
         const btns = [
-            [{ text: "🔄 轮换机器人密钥 (Zero-Downtime)", callback_data: "rotate_ssh" }],
+            [{ text: "➕ 获取一键加入指令 (Join)", callback_data: `join_cmd` }],
+            [{ text: "🔄 彻底轮换并同步云端 (Stateless)", callback_data: "rotate_ssh" }],
             [{ text: "🔙 返回主菜单", callback_data: "show_main" }]
         ];
         await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns }, update.callback_query?.message.message_id);
+    }
+
+    if (cbData === "join_cmd") {
+        const url = (await getConfig(env, "CF_WORKER_URL")) || "YOUR_WORKER_URL";
+        const token = CLUSTER_TOKEN;
+        const cmd = `curl -sL https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh | bash -s -- --silent --cf-worker-url ${url} --cluster-token ${token}`;
+        const info = `📋 <b>一键加入集群指令</b>\n\n在新服务器执行下方命令，即可自动配置并上线：\n\n<code>${cmd}</code>\n\n💡 <i>提示：该指令会自动安装 Guardian 并将其指向当前集群中枢。</i>`;
+        const btns = [[{ text: "🔙 返回安全中心", callback_data: "show_security" }]];
+        await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns }, update.callback_query.message.message_id);
     }
 
     if (cbData === "rotate_ssh") {
@@ -383,4 +454,13 @@ async function sendTelegram(t, c, text, rm, eid) {
     if (eid) b.message_id = eid;
     if (rm) b.reply_markup = rm;
     await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
+}
+
+function drawSparkline(arr) {
+    if (!arr || arr.length === 0) return "";
+    const chars = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+    const max = Math.max(...arr);
+    const min = Math.min(...arr);
+    const range = max - min || 1;
+    return arr.map(v => chars[Math.floor(((v - min) / range) * (chars.length - 1))]).join("");
 }

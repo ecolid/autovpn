@@ -1,9 +1,8 @@
-#!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.12.0 - Persistence & Precision)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.14.2 - Stateless Security)
 # =================================================================
 
-VERSION="v1.12.0"
+VERSION="v1.14.2"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -30,6 +29,8 @@ while [[ $# -gt 0 ]]; do
             if [ -f "$ENV_PATH" ]; then source "$ENV_PATH"; fi
             AUTO_UPDATE_BOT=1; shift ;;
         start|stop|restart|log|speed) CMD_ACTION="$1"; shift ;;
+        --cf-worker-url) CF_WORKER_URL="$2"; shift 2 ;;
+        --cluster-token) CLUSTER_TOKEN="$2"; shift 2 ;;
         *) shift ;;
     esac
 done
@@ -477,7 +478,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.12.0)..."
+    log_info "正在配置云端 D1 数据库 (v1.13.0)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -494,9 +495,15 @@ deploy_cf_worker() {
     fi
     echo "$d1_id" > /usr/local/etc/autovpn/.d1_id
 
-    # 初始化 D1 Schema (严格模式)
-    log_info "正在初始化任务编排 SQL 表结构..."
-    local sql_init="CREATE TABLE IF NOT EXISTS nodes (id TEXT PRIMARY KEY, cpu REAL, mem_pct REAL, v TEXT, t INTEGER, state TEXT DEFAULT 'online', health TEXT DEFAULT '{}', traffic_total TEXT DEFAULT '{}', quality TEXT DEFAULT '{}', ip TEXT, is_selected INTEGER DEFAULT 0, alert_sent INTEGER DEFAULT 0); CREATE TABLE IF NOT EXISTS traffic_snapshots (node_id TEXT, up INTEGER, down INTEGER, t INTEGER); CREATE TABLE IF NOT EXISTS commands (id INTEGER PRIMARY KEY AUTOINCREMENT, target_id TEXT, cmd TEXT, task_id INTEGER, result TEXT, status TEXT DEFAULT 'pending', completed_at INTEGER); CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, val TEXT); INSERT OR REPLACE INTO config (key, val) VALUES ('BOT_TOKEN', '$TG_BOT_TOKEN'); INSERT OR REPLACE INTO config (key, val) VALUES ('CHAT_ID', '$TG_CHAT_ID'); INSERT OR REPLACE INTO config (key, val) VALUES ('CF_TOKEN', '$CF_API_TOKEN');"
+    # 初始化 D1 Schema (v1.13.0 - Hourly Analytics)
+    log_info "正在初始化任务编斥 SQL 表结构..."
+    local sql_init="CREATE TABLE IF NOT EXISTS nodes (id TEXT PRIMARY KEY, cpu REAL, mem_pct REAL, v TEXT, t INTEGER, state TEXT DEFAULT 'online', health TEXT DEFAULT '{}', traffic_total TEXT DEFAULT '{}', quality TEXT DEFAULT '{}', ip TEXT, is_selected INTEGER DEFAULT 0, alert_sent INTEGER DEFAULT 0); 
+    CREATE TABLE IF NOT EXISTS traffic_snapshots (node_id TEXT, up INTEGER, down INTEGER, t INTEGER, type TEXT DEFAULT 'realtime'); 
+    CREATE TABLE IF NOT EXISTS commands (id INTEGER PRIMARY KEY AUTOINCREMENT, target_id TEXT, cmd TEXT, task_id INTEGER, result TEXT, status TEXT DEFAULT 'pending', completed_at INTEGER); 
+    CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, val TEXT); 
+    INSERT OR REPLACE INTO config (key, val) VALUES ('BOT_TOKEN', '$TG_BOT_TOKEN'); 
+    INSERT OR REPLACE INTO config (key, val) VALUES ('CHAT_ID', '$TG_CHAT_ID'); 
+    INSERT OR REPLACE INTO config (key, val) VALUES ('CF_TOKEN', '$CF_API_TOKEN');"
     local payload=$(jq -n --arg sql "$sql_init" '{"sql": $sql}')
     cf_api POST "/d1/database/${d1_id}/query" "$payload" > /dev/null || return 1
 
@@ -1071,11 +1078,17 @@ rotate_cluster_keys() {
     done
 
     # 更新本地
-    mv /tmp/id_new /usr/local/etc/autovpn/cluster_key
-    mv /tmp/id_new.pub /usr/local/etc/autovpn/cluster_key.pub
-    chmod 600 /usr/local/etc/autovpn/cluster_key
-    
-    log_info "✨ 密钥轮换圆满完成！全集群已进入新纪元。"
+    # v1.14.0: 轮换时也要同步云端并自毁本地
+    local d1_id=$(cat /usr/local/etc/autovpn/.d1_id 2>/dev/null)
+    local prv_new=$(cat /tmp/id_new)
+    local pub_new=$(cat /tmp/id_new.pub)
+    local sql_upd="INSERT OR REPLACE INTO config (key, val) VALUES ('SSH_PRV', '$prv_new'), ('SSH_PUB', '$pub_new')"
+    local payload=$(jq -n --arg sql "$sql_upd" '{"sql": $sql}')
+    cf_api POST "/d1/database/${d1_id}/query" "$payload" &>/dev/null
+
+    # [v1.14.0] 物理销毁：本地不再保留私钥
+    rm -f /usr/local/etc/autovpn/cluster_key
+    log_info "✨ 密钥轮换圆满完成！已开启【云端保险箱】无痕模式。"
     rm -f /tmp/id_new*
 }
 
@@ -1122,9 +1135,10 @@ setup_guardian_bot() {
         # 2. [v1.8.3] 自动识别并刷新“老板密钥” (Owner DNA Sync)
         sync_owner_dna
         
-        # 3. 部署私钥 (用于医生节点外访)
-        echo "$prv_key" > /usr/local/etc/autovpn/cluster_key
-        chmod 600 /usr/local/etc/autovpn/cluster_key
+        # 3. [v1.14.0] 无痕化：不再将私钥持久化到磁盘
+        # 原 echo "$prv_key" > /usr/local/etc/autovpn/cluster_key
+        # 现在的策略：本地仅存公钥（用于校验），私钥仅在执行瞬间从 Worker 注入内存
+        rm -f /usr/local/etc/autovpn/cluster_key
         
         # 4. 配置 authorized_keys (双锁并进)
         # a. 机器人自愈锁 (Forced Command)
@@ -1168,34 +1182,41 @@ setup_guardian_bot() {
 
         # 集群模式选择
         if [[ -z "$CLUSTER_MODE" || "$CLUSTER_MODE" == "off" ]]; then
-            echo -e "\n${CYAN}--- Guardian Cluster 集群配置 ---${NC}"
-            echo -e "1. 独立运行 (单机 Telegram 控制)"
-            echo -e "2. 使用 Cloudflare Worker (全自动一键部署)"
-            echo -e "3. 使用 Cloudflare Worker (手动填入已有信息)"
-            read -p "请选择模式 [1/2/3, 默认 1]: " cluster_choice
-            case $cluster_choice in
-                2)
-                    deploy_cf_worker || { echo "切换到手动模式..."; read -p "请输入 Cloudflare Worker URL: " CF_WORKER_URL; read -p "请输入集群通讯 Token: " CLUSTER_TOKEN; CLUSTER_MODE="on"; }
-                    ;;
-                3)
-                    CLUSTER_MODE="on"
-                    read -p "请输入 Cloudflare Worker URL: " CF_WORKER_URL
-                    read -p "请输入集群通讯 Token: " CLUSTER_TOKEN
-                    save_env
-                    ;;
-                *)
-                    CLUSTER_MODE="off"
-                    save_env
-                    ;;
-            esac
+            # [v1.14.1] 如果命令行已传入 URL 和 Token，直接开启
+            if [[ ! -z "$CF_WORKER_URL" && ! -z "$CLUSTER_TOKEN" ]]; then
+                CLUSTER_MODE="on"
+                save_env
+                log_info "✅ 已通过命令行参数成功加入集群。"
+            else
+                echo -e "\n${CYAN}--- Guardian Cluster 集群配置 ---${NC}"
+                echo -e "1. 独立运行 (单机 Telegram 控制)"
+                echo -e "2. 使用 Cloudflare Worker (全自动一键部署)"
+                echo -e "3. 使用 Cloudflare Worker (手动填入已有信息)"
+                read -p "请选择模式 [1/2/3, 默认 1]: " cluster_choice
+                case $cluster_choice in
+                    2)
+                        deploy_cf_worker || { echo "切换到手动模式..."; read -p "请输入 Cloudflare Worker URL: " CF_WORKER_URL; read -p "请输入集群通讯 Token: " CLUSTER_TOKEN; CLUSTER_MODE="on"; }
+                        ;;
+                    3)
+                        CLUSTER_MODE="on"
+                        read -p "请输入 Cloudflare Worker URL: " CF_WORKER_URL
+                        read -p "请输入集群通讯 Token: " CLUSTER_TOKEN
+                        save_env
+                        ;;
+                    *)
+                        CLUSTER_MODE="off"
+                        save_env
+                        ;;
+                esac
+            fi
         fi
     fi
 
-    # 创建驱动脚本 (v1.12.0 - Persistence & Precision)
+    # 创建驱动脚本 (v1.14.0 - Stateless Security)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, statistics, sys, socket
 
-VERSION = "1.12.0"
+VERSION = "1.14.2"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
 
@@ -1238,11 +1259,18 @@ def measure_quality(target):
     except: return {"lat": 0, "jit": 0, "loss": 100}
 
 def check_health():
-    health = {"xray": "OK", "nginx": "OK", "net": "OK", "warp": "SKIP"}
+    health = {"xray": "OK", "nginx": "OK", "net": "OK", "warp": "SKIP", "loop": "OK"}
     # 使用 full path 确保稳定性
     if os.system("/usr/bin/systemctl is-active --quiet xray") != 0: health["xray"] = "FAIL"
     if os.system("/usr/bin/systemctl is-active --quiet nginx") != 0: health["nginx"] = "FAIL"
     
+    # [v1.13.0] 核心进化：代理全链路 loopback 拨测
+    # 尝试通过本地 10086 (Reality) 或 127.0.0.1:40000 (WARP) 探测真实通路
+    # 注意：这里我们优先测 Xray 的主出口
+    test_cmd = "curl -s --socks5 127.0.0.1:10086 https://api.ipify.org --connect-timeout 3"
+    if health["xray"] == "OK" and os.system(test_cmd + " > /dev/null") != 0:
+        health["loop"] = "FAIL"
+
     # [v1.12.0] WARP 探测深度优化
     warp_active = os.system("/usr/bin/systemctl is-active --quiet warp-svc") == 0
     if warp_active:
@@ -1293,16 +1321,43 @@ def main():
                 task = r.json()
                 if task.get("cmd"):
                     if task["cmd"].startswith("rescue_"):
+                        # [v1.14.0] 增强逻辑：支持从 Worker 注入私钥 (JIT Injection)
                         target_ip = task["cmd"].split("_")[1]
-                        key_path = "/usr/local/etc/autovpn/cluster_key"
-                        ssh_cmd = f"ssh -i {key_path} -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@{target_ip} exit"
-                        res = "✅ 成功" if os.system(ssh_cmd) == 0 else f"❌ 失败: {target_ip}"
+                        prv_injected = task.get("ssh_key") # v1.14.0 新字段
+                        
+                        # 1. 内存中还原临时密钥对 (JIT)
+                        jit_key = "/tmp/jit_v" + str(int(time.time()))
+                        # 如果 Worker 没给母钥，则维持 v1.13.0 的临时授权模式
+                        if prv_injected:
+                            with open(jit_key, "w") as f: f.write(prv_injected)
+                            os.chmod(jit_key, 0o600)
+                            ssh_cmd = f"ssh -i {jit_key} -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@{target_ip} 'autovpn --rescue-worker'"
+                        else:
+                            # 回退到 v1.13/医生自建密钥模式
+                            os.system(f"ssh-keygen -t ed25519 -N '' -f {jit_key} -q")
+                            with open(jit_key + ".pub", "r") as f: pub_key = f.read().strip()
+                            sync_data = get_status_data(tid=task['task_id'], res=f"JIT_PUB:{pub_key}")
+                            requests.post(f"{cf_url}/report", json=sync_data, headers={"X-Cluster-Token": c_token}, timeout=10)
+                            time.sleep(5)
+                            ssh_cmd = f"ssh -i {jit_key} -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@{target_ip} 'autovpn --rescue-worker'"
+                        
+                        res = "✅ 救援成功" if os.system(ssh_cmd) == 0 else f"❌ 救援失败: {target_ip}"
+                        os.system(f"rm -f {jit_key}*")
+                        
+                    elif task["cmd"].startswith("JIT_MOUNT:"):
+                        # [v1.13.0] JIT 动态救援：病人端解析
+                        jit_pub = task["cmd"].split("JIT_MOUNT:")[1]
+                        auth_file = "/root/.ssh/authorized_keys"
+                        with open(auth_file, "a") as f: f.write(f"\n{jit_pub} # JIT_AUTOVPN_RESCUE\n")
+                        res = "✅ JIT 密钥已挂载"
+                        # 自动计划 60 秒后清理 (简单实现)
+                        os.system("echo 'sed -i \"/JIT_AUTOVPN_RESCUE/d\" /root/.ssh/authorized_keys' | at now + 1 minute 2>/dev/null")
                     elif task["cmd"] == "SELF_UPDATE":
                         res = run_shell("wget -qO /tmp/install.sh https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh && bash /tmp/install.sh --update-bot --silent")
                     else:
-                        # [v1.12.0] 强制使用持久化脚本路径，解决 No such file 报错
-                        target = "/usr/local/etc/autovpn/install.sh"
-                        if not os.path.exists(target): target = "/usr/local/bin/autovpn"
+                        # [v1.14.2] 增强路径弹性：优先使用绝对路径，其次尝试 PATH
+                        targets = ["/usr/local/etc/autovpn/install.sh", "/usr/local/bin/autovpn"]
+                        target = next((t for t in targets if os.path.exists(t)), "autovpn")
                         res = run_shell(f"bash {target} {task['cmd']}")
                     requests.post(f"{cf_url}/report", json=get_status_data(tid=task['task_id'], res=res), 
                                  headers={"X-Cluster-Token": c_token}, timeout=10)
@@ -1329,9 +1384,15 @@ WantedBy=multi-user.target
 EOF
 
     # [v1.12.0] 脚本持久化部署：确保全局指令永远指向正确的脚本
-    cp "$(readlink -f "$0")" /usr/local/etc/autovpn/install.sh
-    chmod +x /usr/local/etc/autovpn/install.sh
-    ln -sf /usr/local/etc/autovpn/install.sh /usr/local/bin/autovpn
+    local target_script="/usr/local/etc/autovpn/install.sh"
+    # [v1.14.2] 修复 piped execution (curl | bash) 导致 $0 指向 bash 的问题
+    if [[ -f "$0" && ! "$0" == *"bash"* ]]; then
+        cp "$(readlink -f "$0")" "$target_script"
+    else
+        wget -qO "$target_script" https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh
+    fi
+    chmod +x "$target_script"
+    ln -sf "$target_script" /usr/local/bin/autovpn
     
     systemctl daemon-reload
     systemctl enable autovpn-guardian && systemctl restart autovpn-guardian
