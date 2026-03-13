@@ -4,6 +4,16 @@
 
 const CLUSTER_TOKEN = "your_private_token_here";
 const VERSION = "v1.18.0";
+const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
+
+function generatePairCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = '';
+    for (let i = 0; i < 6; i++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return code;
+}
 
 export default {
     async fetch(request, env) {
@@ -19,6 +29,66 @@ export default {
         const token = request.headers.get("X-Cluster-Token");
         const dbToken = await getConfig(env, "CLUSTER_TOKEN");
         if (token !== CLUSTER_TOKEN && token !== dbToken) return new Response("Unauthorized", { status: 403 });
+
+        // 配对码接口
+        if (url.pathname === "/pair" && request.method === "POST") {
+            const body = await request.json();
+            const { code, action } = body;
+            
+            if (action === "create") {
+                // 生成配对码
+                const pairCode = generatePairCode();
+                const cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
+                const clusterToken = await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN;
+                const expireAt = Math.floor(Date.now() / 1000) + PAIR_CODE_EXPIRE;
+                
+                // 存储配对码
+                await env.DB.prepare("INSERT OR REPLACE INTO config (key, val) VALUES (?, ?)")
+                    .bind(`PAIR_${pairCode}`, JSON.stringify({
+                        url: cfWorkerUrl,
+                        token: clusterToken,
+                        expire: expireAt
+                    })).run();
+                
+                return new Response(JSON.stringify({ 
+                    success: true, 
+                    code: pairCode,
+                    expire: PAIR_CODE_EXPIRE
+                }));
+            }
+            
+            if (action === "verify") {
+                // 验证配对码并获取集群信息
+                const row = await env.DB.prepare("SELECT val FROM config WHERE key = ?")
+                    .bind(`PAIR_${code}`).first();
+                
+                if (!row) {
+                    return new Response(JSON.stringify({ success: false, error: "配对码无效" }));
+                }
+                
+                const data = JSON.parse(row.val);
+                const now = Math.floor(Date.now() / 1000);
+                
+                if (now > data.expire) {
+                    // 清理过期配对码
+                    await env.DB.prepare("DELETE FROM config WHERE key = ?")
+                        .bind(`PAIR_${code}`).run();
+                    return new Response(JSON.stringify({ success: false, error: "配对码已过期" }));
+                }
+                
+                // 配对成功后删除配对码（一次性）
+                await env.DB.prepare("DELETE FROM config WHERE key = ?")
+                    .bind(`PAIR_${code}`).run();
+                
+                return new Response(JSON.stringify({ 
+                    success: true, 
+                    cf_worker_url: data.url,
+                    cluster_token: data.token
+                }));
+            }
+            
+            return new Response(JSON.stringify({ error: "未知操作" }));
+        }
 
         if (url.pathname === "/report" && request.method === "POST") {
             const data = await request.json();
@@ -256,7 +326,8 @@ async function handleTelegramUpdate(update, env) {
         const btns = [
             [{ text: "🔄 升级指挥部 (Self-Update)", callback_data: "self_update_worker" }],
             [{ text: "➕ 获取一键加入指令", callback_data: "join_cmd" }],
-            [{ text: "🔄 轮换 SSH 密钥", callback_data: "rotate_ssh" }],
+            [{ text: "� 生成配对码", callback_data: "generate_pair" }],
+            [{ text: "� 轮换 SSH 密钥", callback_data: "rotate_ssh" }],
             [{ text: "🔙 返回主菜单", callback_data: "show_main" }]
         ];
         await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns }, update.callback_query?.message.message_id);
@@ -318,7 +389,28 @@ async function handleTelegramUpdate(update, env) {
             return new Response("OK");
         }
         await env.DB.prepare("INSERT INTO commands (target_id, cmd, task_id) VALUES (?, ?, ?)").bind(doc.id, "--rotate-keys", Date.now()).run();
-        await sendTelegram(BOT_TOKEN, CHAT_ID, `🔀 <b>密钥轮换任务已发派</b>\n执行官员: ${doc.id}\n正在进行“三步走”无缝切换...`);
+        await sendTelegram(BOT_TOKEN, CHAT_ID, `🔀 <b>密钥轮换任务已发派</b>\n执行官员: ${doc.id}\n正在进行"三步走"无缝切换...`);
+        return new Response("OK");
+    }
+
+    if (cbData === "generate_pair") {
+        const cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
+        if (!cfWorkerUrl) {
+            await sendTelegram(BOT_TOKEN, CHAT_ID, "❌ 错误: 未配置集群 Worker URL");
+            return new Response("OK");
+        }
+        const res = await fetch(cfWorkerUrl + "/pair", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "create" })
+        });
+        const data = await res.json();
+        if (data.success) {
+            const cmd = `curl -sL https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh | bash -s -- --pair ${data.code}`;
+            await sendTelegram(BOT_TOKEN, CHAT_ID, `🔗 <b>配对码已生成!</b>\n\n配对码: <code>${data.code}</code>\n有效期: ${Math.floor(data.expire / 60)} 分钟\n\n📋 <b>一键加入命令:</b>\n\n<code>${cmd}</code>\n\n💡 将此命令复制到新 VPS 执行即可自动加入集群`);
+        } else {
+            await sendTelegram(BOT_TOKEN, CHAT_ID, `❌ 生成失败: ${data.error}`);
+        }
         return new Response("OK");
     }
 

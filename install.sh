@@ -30,6 +30,7 @@ while [[ $# -gt 0 ]]; do
         start|stop|restart|log|speed) CMD_ACTION="$1"; shift ;;
         --cf-worker-url) CF_WORKER_URL="$2"; shift 2 ;;
         --cluster-token) CLUSTER_TOKEN="$2"; shift 2 ;;
+        --pair) PAIR_CODE="$2"; shift 2 ;;
         *) shift ;;
     esac
 done
@@ -1963,6 +1964,41 @@ main() {
         log_info ">>> 检测到密钥轮换指令，正在启动三步走安全轮换系统..."
         if [ -f "$ENV_PATH" ]; then source "$ENV_PATH"; fi
         rotate_cluster_keys
+        exit 0
+    fi
+
+    if [[ ! -z "$PAIR_CODE" ]]; then
+        log_info ">>> 检测到配对码，正在加入集群..."
+        
+        # 需要获取 Worker URL 才能验证配对码
+        if [[ -z "$CF_WORKER_URL" ]]; then
+            log_err "错误: 使用配对码模式需要提供 --cf-worker-url 参数"
+            log_info "请从 Telegram 机器人获取完整的加入命令"
+            exit 1
+        fi
+        
+        log_info "正在验证配对码..."
+        local pair_res=$(curl -s -X POST "${CF_WORKER_URL}/pair" \
+            -H "Content-Type: application/json" \
+            -d "{\"action\": \"verify\", \"code\": \"$PAIR_CODE\"}")
+        
+        local pair_success=$(echo "$pair_res" | jq -r '.success')
+        if [[ "$pair_success" != "true" ]]; then
+            local pair_error=$(echo "$pair_res" | jq -r '.error')
+            log_err "配对失败: $pair_error"
+            exit 1
+        fi
+        
+        CF_WORKER_URL=$(echo "$pair_res" | jq -r '.cf_worker_url')
+        CLUSTER_TOKEN=$(echo "$pair_res" | jq -r '.cluster_token')
+        
+        log_info "✅ 配对成功！正在配置集群..."
+        MODE="silent"
+        CLUSTER_MODE="on"
+        save_env
+        optimize_system
+        setup_guardian_bot
+        log_info "✅ 节点已成功加入集群！"
         exit 0
     fi
     # 如果是 BOT 自动更新，则跳备菜单
