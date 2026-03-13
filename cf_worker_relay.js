@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.22";
+const VERSION = "v1.18.24";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -60,12 +60,15 @@ export default {
             } catch (e) { return new Response(e.message, { status: 200 }); }
         }
 
-        const token = request.headers.get("X-Cluster-Token");
-        const dbToken = await getConfig(env, "CLUSTER_TOKEN");
-        if (token !== CLUSTER_TOKEN && token !== dbToken) return new Response("Unauthorized", { status: 403 });
+        // 配对码接口（无需认证，配对码本身就是凭证）
+        if (url.pathname === "/pair" && request.method === "POST") {
 
-        // 保存配置接口
+        // 保存配置接口（需要认证）
         if (url.pathname.startsWith("/config/") && request.method === "PUT") {
+            const token = request.headers.get("X-Cluster-Token");
+            const dbToken = await getConfig(env, "CLUSTER_TOKEN");
+            if (token !== CLUSTER_TOKEN && token !== dbToken) return new Response("Unauthorized", { status: 403 });
+            
             const key = url.pathname.split("/")[2];
             const body = await request.json();
             const { value } = body;
@@ -76,36 +79,34 @@ export default {
                 return new Response(JSON.stringify({ error: e.message }), { status: 500 });
             }
         }
-
-        // 配对码接口
-        if (url.pathname === "/pair" && request.method === "POST") {
             const body = await request.json();
             const { code, action } = body;
             
             if (action === "create") {
-                // 生成配对码
-                const pairCode = generatePairCode();
+                // 生成配对码（需要认证）
+                const token = request.headers.get("X-Cluster-Token");
+                const dbToken = await getConfig(env, "CLUSTER_TOKEN");
+                if (token !== CLUSTER_TOKEN && token !== dbToken) return new Response("Unauthorized", { status: 403 });
+                
+                // 生成加密配对码（包含 URL + Token + 过期时间）
                 const cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
                 const clusterToken = await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN;
-                const expireAt = Math.floor(Date.now() / 1000) + PAIR_CODE_EXPIRE;
-                
-                // 存储配对码
-                await env.DB.prepare("INSERT OR REPLACE INTO config (key, val) VALUES (?, ?)")
-                    .bind(`PAIR_${pairCode}`, JSON.stringify({
-                        url: cfWorkerUrl,
-                        token: clusterToken,
-                        expire: expireAt
-                    })).run();
+                const data = {
+                    url: cfWorkerUrl,
+                    token: clusterToken,
+                    expire: Date.now() + 300000 // 5 分钟
+                };
+                const pairCode = encrypt(data, CLUSTER_TOKEN);
                 
                 return new Response(JSON.stringify({ 
                     success: true, 
                     code: pairCode,
-                    expire: PAIR_CODE_EXPIRE
+                    expire: 300
                 }));
             }
             
             if (action === "verify") {
-                // 解密配对码
+                // 验证配对码（无需认证）
                 const data = decrypt(code, CLUSTER_TOKEN);
                 
                 if (!data) {
@@ -127,6 +128,10 @@ export default {
             
             return new Response(JSON.stringify({ error: "未知操作" }));
         }
+
+        const token = request.headers.get("X-Cluster-Token");
+        const dbToken = await getConfig(env, "CLUSTER_TOKEN");
+        if (token !== CLUSTER_TOKEN && token !== dbToken) return new Response("Unauthorized", { status: 403 });
 
         if (url.pathname === "/report" && request.method === "POST") {
             const data = await request.json();
