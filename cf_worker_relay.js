@@ -3,7 +3,31 @@
  */
 
 const CLUSTER_TOKEN = "your_private_token_here";
-const VERSION = "v1.18.13";
+
+// 简单的加密解密（Base64 + XOR）
+function encrypt(data, key) {
+    const json = JSON.stringify(data);
+    const encoded = encodeURIComponent(json);
+    let result = '';
+    for (let i = 0; i < encoded.length; i++) {
+        result += String.fromCharCode(encoded.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+    }
+    return btoa(result);
+}
+
+function decrypt(cipher, key) {
+    try {
+        const decoded = atob(cipher);
+        let result = '';
+        for (let i = 0; i < decoded.length; i++) {
+            result += String.fromCharCode(decoded.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+        }
+        return JSON.parse(decodeURIComponent(result));
+    } catch (e) {
+        return null;
+    }
+}
+const VERSION = "v1.18.14";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -81,27 +105,24 @@ export default {
             }
             
             if (action === "verify") {
-                // 验证配对码并获取集群信息
-                const row = await env.DB.prepare("SELECT val FROM config WHERE key = ?")
-                    .bind(`PAIR_${code}`).first();
+                // 解密配对码
+                const data = decrypt(code, CLUSTER_TOKEN);
                 
-                if (!row) {
-                    return new Response(JSON.stringify({ success: false, error: "配对码无效" }));
+                if (!data) {
+                    return new Response(JSON.stringify({ success: false, error: "配对码无效或已损坏" }));
                 }
                 
-                const data = JSON.parse(row.val);
-                const now = Math.floor(Date.now() / 1000);
-                
+                const now = Date.now();
                 if (now > data.expire) {
-                    // 清理过期配对码
-                    await env.DB.prepare("DELETE FROM config WHERE key = ?")
-                        .bind(`PAIR_${code}`).run();
-                    return new Response(JSON.stringify({ success: false, error: "配对码已过期" }));
+                    return new Response(JSON.stringify({ success: false, error: "配对码已过期，请重新生成" }));
                 }
                 
-                // 配对成功后删除配对码（一次性）
-                await env.DB.prepare("DELETE FROM config WHERE key = ?")
-                    .bind(`PAIR_${code}`).run();
+                // 返回集群配置
+                return new Response(JSON.stringify({ 
+                    success: true, 
+                    cf_worker_url: data.url,
+                    cluster_token: data.token
+                }));
                 
                 return new Response(JSON.stringify({ 
                     success: true, 
