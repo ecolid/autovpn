@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.7"
+VERSION="v1.18.8"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -1502,7 +1502,50 @@ show_menu() {
             read -p "按回车键返回菜单..."
             ;;
         7) open_ports 80; open_ports 443; [ ! -z "$EXISTING_PORT" ] && open_ports $EXISTING_PORT; log_info "防火墙策略已更新。"; read -p "按回车键返回菜单..." ;;
-        8) setup_guardian_bot; read -p "按回车键返回菜单..." ;;
+        8) 
+            echo -e "\n${BLUE}--- Guardian 集群中心 ---${NC}"
+            echo -e "1. 配置集群 (首次部署)"
+            echo -e "2. 配对加入集群 (使用配对码)"
+            echo -e "3. 刷新本地守护进程"
+            echo -e "0. 返回主菜单"
+            read -p "请选择: " guardian_choice
+            case $guardian_choice in
+                1) setup_guardian_bot ;;
+                2) 
+                    read -p "请输入配对码 (6 位): " pair_code
+                    if [[ -z "$pair_code" ]]; then
+                        log_err "配对码不能为空"
+                    else
+                        log_info "正在验证配对码..."
+                        # 从已配置的 Worker 获取配置
+                        if [ -f "$ENV_PATH" ]; then source "$ENV_PATH"; fi
+                        if [[ -z "$CF_WORKER_URL" ]]; then
+                            log_err "错误：尚未配置 Worker URL，请先选择选项 1 部署集群"
+                        else
+                            local pair_res=$(curl -s -X POST "${CF_WORKER_URL}/pair" \
+                                -H "Content-Type: application/json" \
+                                -d "{\"action\": \"verify\", \"code\": \"$pair_code\"}")
+                            local pair_success=$(echo "$pair_res" | jq -r '.success')
+                            if [[ "$pair_success" == "true" ]]; then
+                                CLUSTER_TOKEN=$(echo "$pair_res" | jq -r '.cluster_token')
+                                log_info "✅ 配对成功！正在配置集群..."
+                                CLUSTER_MODE="on"
+                                save_env
+                                setup_guardian_bot
+                                log_info "✅ 节点已成功加入集群！"
+                            else
+                                local pair_error=$(echo "$pair_res" | jq -r '.error')
+                                log_err "配对失败：$pair_error"
+                            fi
+                        fi
+                    fi
+                    ;;
+                3) systemctl restart autovpn-guardian && log_info "✅ 守护进程已重启" || log_err "重启失败" ;;
+                0) ;;
+                *) log_err "无效输入"; sleep 1 ;;
+            esac
+            read -p "按回车键返回菜单..." 
+            ;;
         9) 
             echo -e "\n${BLUE}--- 脚本维护选项 ---${NC}"
             echo -e "1. 检查并更新脚本 (Self-Update)"
