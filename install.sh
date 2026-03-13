@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================
-# AutoVPN - 一键 VPS 代理配置脚本 (v1.11.0 - Command Dispatcher)
+# AutoVPN - 一键 VPS 代理配置脚本 (v1.12.0 - Persistence & Precision)
 # =================================================================
 
-VERSION="v1.11.0"
+VERSION="v1.12.0"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -477,7 +477,7 @@ deploy_cf_worker() {
         apt-get update &> /dev/null && apt-get install -y jq &> /dev/null
     fi
 
-    log_info "正在配置云端 D1 数据库 (v1.11.0)..."
+    log_info "正在配置云端 D1 数据库 (v1.12.0)..."
     local d1_res d1_id
     d1_res=$(cf_api POST "/d1/database" '{"name": "autovpn_db"}')
     if [[ $? -ne 0 ]]; then
@@ -1191,13 +1191,16 @@ setup_guardian_bot() {
         fi
     fi
 
-    # 创建驱动脚本 (v1.11.0 - Command Dispatcher)
+    # 创建驱动脚本 (v1.12.0 - Persistence & Precision)
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, statistics, sys, socket
 
-VERSION = "1.11.0"
+VERSION = "1.12.0"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 NODE_ID = socket.gethostname()
+
+# 强制注入 PATH 确保 crontab/systemd 环境正常
+os.environ["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # [Sentinel] 救援回执模式 - 由 SSH 远程触发
 if "--rescue-worker" in sys.argv:
@@ -1236,14 +1239,22 @@ def measure_quality(target):
 
 def check_health():
     health = {"xray": "OK", "nginx": "OK", "net": "OK", "warp": "SKIP"}
-    if os.system("systemctl is-active --quiet xray") != 0: health["xray"] = "FAIL"
-    if os.system("systemctl is-active --quiet nginx") != 0: health["nginx"] = "FAIL"
-    # [v1.10.0] 对齐 VPS 本地检测逻辑：通过 systemctl 判断 WARP 存在
-    if os.system("systemctl is-active --quiet warp-svc") == 0:
-        warp_res = subprocess.getoutput("warp-cli status")
-        health["warp"] = "OK" if "Connected" in warp_res else "FAIL"
+    # 使用 full path 确保稳定性
+    if os.system("/usr/bin/systemctl is-active --quiet xray") != 0: health["xray"] = "FAIL"
+    if os.system("/usr/bin/systemctl is-active --quiet nginx") != 0: health["nginx"] = "FAIL"
+    
+    # [v1.12.0] WARP 探测深度优化
+    warp_active = os.system("/usr/bin/systemctl is-active --quiet warp-svc") == 0
+    if warp_active:
+        # 优先尝试 cli status
+        warp_res = subprocess.getoutput("warp-cli status 2>/dev/null")
+        if "Connected" in warp_res:
+            health["warp"] = "OK"
+        else:
+            # 备选方案：检查 socks5 出口能否通 ipv4
+            check_cmd = "curl -s --socks5 127.0.0.1:40000 https://api.ipify.org --connect-timeout 2"
+            health["warp"] = "OK" if os.system(check_cmd + " > /dev/null") == 0 else "FAIL"
     elif os.system("command -v warp-cli > /dev/null") == 0:
-        # 如果服务没起，但命令在，也标记为 FAIL 而非 SKIP
         health["warp"] = "FAIL"
     return health
 
@@ -1289,8 +1300,9 @@ def main():
                     elif task["cmd"] == "SELF_UPDATE":
                         res = run_shell("wget -qO /tmp/install.sh https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh && bash /tmp/install.sh --update-bot --silent")
                     else:
-                        target = "/usr/local/bin/autovpn"
-                        if not os.path.exists(target): target = "/usr/local/etc/autovpn/install.sh"
+                        # [v1.12.0] 强制使用持久化脚本路径，解决 No such file 报错
+                        target = "/usr/local/etc/autovpn/install.sh"
+                        if not os.path.exists(target): target = "/usr/local/bin/autovpn"
                         res = run_shell(f"bash {target} {task['cmd']}")
                     requests.post(f"{cf_url}/report", json=get_status_data(tid=task['task_id'], res=res), 
                                  headers={"X-Cluster-Token": c_token}, timeout=10)
@@ -1316,12 +1328,13 @@ RestartSec=15
 WantedBy=multi-user.target
 EOF
 
+    # [v1.12.0] 脚本持久化部署：确保全局指令永远指向正确的脚本
+    cp "$(readlink -f "$0")" /usr/local/etc/autovpn/install.sh
+    chmod +x /usr/local/etc/autovpn/install.sh
+    ln -sf /usr/local/etc/autovpn/install.sh /usr/local/bin/autovpn
+    
     systemctl daemon-reload
     systemctl enable autovpn-guardian && systemctl restart autovpn-guardian
-    
-    # [Standard] 建立全局软链接 (修正版本)
-    ln -sf "$(readlink -f "$0")" /usr/local/bin/autovpn
-    chmod +x /usr/local/bin/autovpn
     
     log_info "✅ Guardian 集群服务与全局指令已刷新"
     
