@@ -3,7 +3,7 @@
  */
 
 const CLUSTER_TOKEN = "your_private_token_here";
-const VERSION = "v1.18.3";
+const VERSION = "v1.18.4";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -209,6 +209,21 @@ async function handleTelegramUpdate(update, env) {
             [{ text: "⚙️ 向导说明", url: "https://github.com/ecolid/autovpn" }]
         ];
         await sendTelegram(BOT_TOKEN, CHAT_ID, welcome, { inline_keyboard: btns }, update.callback_query?.message.message_id);
+        return new Response("OK");
+    }
+
+    if (text === "/update" || cbData === "show_update") {
+        const info = "☁️ <b>云端同步中心</b>\n\n点击下方按钮从 GitHub 拉取最新脚本并重新部署 Worker。";
+        const btns = [[{ text: "🔄 升级指挥部", callback_data: "self_update_worker" }], [{ text: "🔙 返回", callback_data: "show_main" }]];
+        await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns }, update.callback_query?.message.message_id);
+        return new Response("OK");
+    }
+
+    if (text === "/routing" || cbData === "show_routing") {
+        const info = "📡 <b>路由与分流中心</b>\n\n💡 发送任意 vless:// 链接即可唤醒部署向导。";
+        const btns = [[{ text: "🔙 返回", callback_data: "show_main" }]];
+        await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns }, update.callback_query?.message.message_id);
+        return new Response("OK");
     }
 
     if (text === "/status" || cbData === "show_status") {
