@@ -1,10 +1,9 @@
 /**
- * Cloudflare Worker for AutoVPN Guardian Cluster (v1.8.3 - Stable Data Compass)
- * Orchestrates: Inter-node Rescue, Interactive Deployment Wizard, Bulk Updates.
+ * Cloudflare Worker for AutoVPN Guardian Cluster (v1.16.0 - Autonomous Sync)
  */
 
 const CLUSTER_TOKEN = "your_private_token_here";
-const VERSION = "1.15.0";
+const VERSION = "v1.16.0";
 
 export default {
     async fetch(request, env) {
@@ -302,7 +301,7 @@ async function handleTelegramUpdate(update, env) {
 
             const cfData = await cfRes.json();
             if (cfData.success) {
-                await sendTelegram(BOT_TOKEN, CHAT_ID, "✅ <b>指挥部进化成功！</b>\nv1.15.0 脉冲自对齐已完成更新。");
+                await sendTelegram(BOT_TOKEN, CHAT_ID, "✅ <b>指挥部进化成功！</b>\n脚本已同步至云端，模块已重载。");
             } else {
                 await sendTelegram(BOT_TOKEN, CHAT_ID, `❌ <b>进化失败: CF API 拒绝</b>\n<pre>${JSON.stringify(cfData.errors)}</pre>`);
             }
