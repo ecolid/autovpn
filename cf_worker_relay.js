@@ -4,7 +4,7 @@
 
 const CLUSTER_TOKEN = "your_private_token_here";
 const VERSION = "v1.18.3";
-const PAIR_CODE_EXPIRE = 300;
+const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -15,8 +15,9 @@ function generatePairCode() {
     return code;
 }
 
-async function fetch(request, env) {
-    const url = new URL(request.url);
+export default {
+    async fetch(request, env) {
+        const url = new URL(request.url);
 
         if (request.method === "POST" && url.pathname === "/webhook") {
             try {
@@ -166,7 +167,7 @@ async function fetch(request, env) {
             return new Response(JSON.stringify({ ok: true }));
         }
         return new Response(`AutoVPN Orchestrator v${VERSION} Online`, { status: 200 });
-    }
+    },
 
     async scheduled(event, env) {
         const BOT_TOKEN = await getConfig(env, "BOT_TOKEN");
@@ -539,49 +540,6 @@ async function handleTelegramUpdate(update, env) {
     return new Response("OK");
 }
 
-    if (text === "/update" || cbData === "show_update") {
-        const token = await getConfig(env, "CF_TOKEN");
-        const account = await getConfig(env, "CF_ACCOUNT");
-        const d1Id = await getConfig(env, "D1_ID");
-        if (!token || !account || !d1Id) {
-            await sendTelegram(BOT_TOKEN, CHAT_ID, "❌ 错误: 云端配置缺失。请在 VPS 跑一次同步。");
-            return new Response("OK");
-        }
-        await sendTelegram(BOT_TOKEN, CHAT_ID, "�� 正在升级指挥部...");
-        try {
-            const res = await fetch("https://raw.githubusercontent.com/ecolid/autovpn/main/cf_worker_relay.js");
-            let code = await res.text();
-            const clusterToken = await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN;
-            code = code.replace(/const CLUSTER_TOKEN = ".*";/, `const CLUSTER_TOKEN = "${clusterToken}";`);
-            const formData = new FormData();
-            formData.append("metadata", JSON.stringify({ main_module: "index.js", bindings: [{ type: "d1", name: "DB", id: d1Id }] }));
-            formData.append("index.js", new Blob([code], { type: "application/javascript+module" }), "index.js");
-            const cfRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/autovpn-relay`, {
-                method: "PUT",
-                headers: { "Authorization": `Bearer ${token}` },
-                body: formData
-            });
-            const cfData = await cfRes.json();
-            if (cfData.success) {
-                await sendTelegram(BOT_TOKEN, CHAT_ID, "✅ 指挥部升级成功!");
-            } else {
-                await sendTelegram(BOT_TOKEN, CHAT_ID, "❌ 升级失败: " + JSON.stringify(cfData.errors));
-            }
-        } catch (e) {
-            await sendTelegram(BOT_TOKEN, CHAT_ID, "❌ 错误: " + e.message);
-        }
-        return new Response("OK");
-    }
-
-    if (text === "/routing" || cbData === "show_routing") {
-        const info = "🛰️ 路由与分流中心
-
-💡 发送任意 vless:// 链接即可唤醒部署向导。";
-        const btns = [[{ text: "🔙 返回", callback_data: "show_main" }]];
-        await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns }, update.callback_query?.message.message_id);
-        return new Response("OK");
-    }
-
 async function showWizardPreview(env, ip, botToken, chatId, editId = null) {
     const raw = await getConfig(env, `wiz_${ip}`);
     if (!raw) return;
@@ -644,5 +602,3 @@ function drawSparkline(arr) {
     const range = max - min || 1;
     return arr.map(v => chars[Math.floor(((v - min) / range) * (chars.length - 1))]).join("");
 }
-
-export default { fetch, scheduled };
