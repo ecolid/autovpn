@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.14"
+VERSION="v1.18.15"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -328,6 +328,7 @@ update_script() {
     log_warn "强制更新脚本中..."
     wget -q -O install.sh https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh && chmod +x install.sh
     log_info "✅ 脚本已更新！正在重启..."
+    sleep 1
     exec ./install.sh
 }
 
