@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.6"
+VERSION="v1.18.7"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -1606,6 +1606,16 @@ main() {
             optimize_system; install_ws_tls
             exit 0
         fi
+    fi
+    
+    # 如果传入了 CF_WORKER_URL 和 CLUSTER_TOKEN，自动进入 Guardian 集群配置
+    if [[ ! -z "$CF_WORKER_URL" && ! -z "$CLUSTER_TOKEN" ]]; then
+        log_info ">>> 检测到 Guardian 集群配置，正在自动部署..."
+        CLUSTER_MODE="on"
+        save_env
+        setup_guardian_bot
+        deploy_cf_worker
+        exit 0
     fi
 
     # 核心循环：主菜单常驻 (v1.18.0.2)
