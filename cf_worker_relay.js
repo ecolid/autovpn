@@ -4,7 +4,7 @@
  */
 
 const CLUSTER_TOKEN = "your_private_token_here";
-const VERSION = "1.14.2";
+const VERSION = "1.14.3";
 
 export default {
     async fetch(request, env) {
@@ -232,7 +232,7 @@ async function handleTelegramUpdate(update, env) {
         await sendTelegram(BOT_TOKEN, CHAT_ID, report, { inline_keyboard: btns }, update.callback_query?.message.message_id);
     }
 
-    // 3. Security Command Center (v1.14.0 - Stateless Security)
+    // 3. Security Command Center (v1.14.3 - Stateless Security)
     if (text === "/ssh" || cbData === "show_security") {
         const pub = await getConfig(env, "SSH_PUB");
         const prv = await getConfig(env, "SSH_PRV");
@@ -240,40 +240,43 @@ async function handleTelegramUpdate(update, env) {
         let info = `🛡️ <b>集群安全指挥中心 (v${VERSION})</b>\n\n`;
 
         info += "👤 <b>老板 DNA (Owner Key):</b>\n";
-        info += owner ? `<code>${owner.substring(0, 40)}...</code>\n` : "<i>(尚未提取)</i>\n";
-        info += "💡 <i>状态：已在全集群自动同步。</i>\n\n";
+        info += owner ? `<code>${owner.substring(0, 32)}...</code>\n` : "<i>(尚未提取)</i>\n";
+        info += "� <b>机器人母钥 (Cluster Pub):</b>\n";
+        info += pub ? `<code>${pub.substring(0, 32)}...</code>\n` : "<i>(尚未生成)</i>\n\n";
 
-        info += "🤖 <b>机器人母钥 (Cluster Key):</b>\n";
-        info += pub ? `<code>${pub.substring(0, 40)}...</code>\n` : "<i>(尚未生成)</i>\n";
-        info += "🏦 <b>云端保险箱 (Cloud Vault):</b>\n";
-        info += prv ? "✅ 🔒 <b>已存入 (本地不再留痕)</b>\n" : "⚠️ ❌ <b>未同步 (本地存在风险)</b>\n";
-        info += "💡 <i>状态：用于节点互救与远程部署。</i>\n\n";
+        info += "🏦 <b>安全存储状态:</b>\n";
+        info += prv ? "✅ 🔒 <b>云端保险箱 (Stateless Mode)</b>\n" : "⚠️ 🔌 <b>本地存储 (Legacy Mode)</b>\n";
+        info += "💡 <i>状态：v1.14.0 后私钥不再驻留 VPS 硬盘。</i>\n\n";
 
-        info += "⚠️ <b>注意：</b> v1.14.0 模式下，所有服务器硬盘均不存储私钥，安全性提升 1000%。";
+        info += "⚠️ <b>注意：</b> 若怀疑泄漏，请立即执行彻底轮换。";
 
         const btns = [
-            [{ text: "➕ 获取一键加入指令 (Join)", callback_data: `join_cmd` }],
-            [{ text: "🔄 彻底轮换并同步云端 (Stateless)", callback_data: "rotate_ssh" }],
+            [{ text: "➕ 获取一键加入指令", callback_data: "join_cmd" }],
+            [{ text: "🔄 彻底轮换并同步云端", callback_data: "rotate_ssh" }],
             [{ text: "🔙 返回主菜单", callback_data: "show_main" }]
         ];
         await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns }, update.callback_query?.message.message_id);
+        return new Response("OK");
     }
 
     if (cbData === "join_cmd") {
         const url = (await getConfig(env, "CF_WORKER_URL")) || "YOUR_WORKER_URL";
-        const token = CLUSTER_TOKEN;
-        const cmd = `curl -sL https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh | bash -s -- --silent --cf-worker-url ${url} --cluster-token ${token}`;
-        const info = `📋 <b>一键加入集群指令</b>\n\n在新服务器执行下方命令，即可自动配置并上线：\n\n<code>${cmd}</code>\n\n💡 <i>提示：该指令会自动安装 Guardian 并将其指向当前集群中枢。</i>`;
-        const btns = [[{ text: "🔙 返回安全中心", callback_data: "show_security" }]];
-        await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns }, update.callback_query.message.message_id);
+        const cmd = `curl -sL https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh | bash -s -- --silent --cf-worker-url ${url} --cluster-token ${CLUSTER_TOKEN}`;
+        const info = `📋 <b>一键加入集群指令</b>\n\n在新服务器执行下方命令即可上线：\n\n<code>${cmd}</code>\n\n💡 <i>提示：该指令包含中枢认证 Token。</i>`;
+        const btns = [[{ text: "🔙 返回安全中心延时", callback_data: "show_security" }]];
+        await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns }, msg.message_id);
+        return new Response("OK");
     }
 
     if (cbData === "rotate_ssh") {
         const doc = await env.DB.prepare("SELECT id FROM nodes WHERE state = 'online' ORDER BY t DESC LIMIT 1").first();
-        if (!doc) return await sendTelegram(BOT_TOKEN, CHAT_ID, "❌ 错误: 无在线医生节点可执行轮换");
-
+        if (!doc) {
+            await sendTelegram(BOT_TOKEN, CHAT_ID, "❌ 错误: 无在线医生节点可执行轮换");
+            return new Response("OK");
+        }
         await env.DB.prepare("INSERT INTO commands (target_id, cmd, task_id) VALUES (?, ?, ?)").bind(doc.id, "--rotate-keys", Date.now()).run();
         await sendTelegram(BOT_TOKEN, CHAT_ID, `🔀 <b>密钥轮换任务已发派</b>\n执行官员: ${doc.id}\n正在进行“三步走”无缝切换...`);
+        return new Response("OK");
     }
 
     // 3. Rescue logic
