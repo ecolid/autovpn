@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.20"
+VERSION="v1.18.21"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -34,6 +34,14 @@ while [[ $# -gt 0 ]]; do
         *) shift ;;
     esac
 done
+
+# 检测是否通过管道执行，如果是则下载后本地执行
+if [ ! -t 0 ]; then
+    # 管道执行模式，下载脚本到本地并执行
+    curl -sL -o /tmp/autovpn_install.sh https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh
+    chmod +x /tmp/autovpn_install.sh
+    exec /tmp/autovpn_install.sh "$@"
+fi
 
 # 如果有动作指令，直接执行并退出
 if [ ! -z "$CMD_ACTION" ]; then
