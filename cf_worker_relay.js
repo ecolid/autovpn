@@ -423,24 +423,36 @@ async function handleTelegramUpdate(update, env) {
 
     if (cbData === "generate_pair") {
         const cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
+        const clusterToken = await getConfig(env, "CLUSTER_TOKEN");
+        
         if (!cfWorkerUrl) {
-            await sendTelegram(BOT_TOKEN, CHAT_ID, "❌ 错误: 未配置集群 Worker URL");
+            await sendTelegram(BOT_TOKEN, CHAT_ID, "❌ 错误：未配置集群 Worker URL，请先部署 Guardian 集群 (8-1)");
             return new Response("OK");
         }
-        const res = await fetch(cfWorkerUrl + "/pair", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "create" })
-        });
-        const data = await res.json();
-        if (data.success) {
-            const cmd = `curl -sL https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh | bash -s -- --pair ${data.code}`;
-            await sendTelegram(BOT_TOKEN, CHAT_ID, `🔗 <b>配对码已生成!</b>\n\n配对码: <code>${data.code}</code>\n有效期: ${Math.floor(data.expire / 60)} 分钟\n\n📋 <b>一键加入命令:</b>\n\n<code>${cmd}</code>\n\n💡 将此命令复制到新 VPS 执行即可自动加入集群`);
-        } else {
-            await sendTelegram(BOT_TOKEN, CHAT_ID, `❌ 生成失败: ${data.error}`);
+        
+        try {
+            const res = await fetch(cfWorkerUrl + "/pair", {
+                method: "POST",
+                headers: { 
+                    "Content-Type": "application/json",
+                    "X-Cluster-Token": clusterToken || ""
+                },
+                body: JSON.stringify({ action: "create" })
+            });
+            const data = await res.json();
+            
+            if (data.success) {
+                const joinCmd = `autovpn\n# 选择：8 - 2\n# 输入配对码：${data.code}`;
+                await sendTelegram(BOT_TOKEN, CHAT_ID, `🔗 <b>配对码已生成!</b>\n\n配对码：<code>${data.code}</code>\n有效期：${Math.floor(data.expire / 60)} 分钟\n\n📋 <b>使用方式:</b>\n\n在新 VPS 执行:\n${joinCmd}\n\n💡 无需复制 URL 和 Token，安全便捷!`);
+            } else {
+                await sendTelegram(BOT_TOKEN, CHAT_ID, `❌ 生成失败：${data.error || '未知错误'}`);
+            }
+        } catch (e) {
+            await sendTelegram(BOT_TOKEN, CHAT_ID, `❌ 请求失败：${e.message}\n\n请检查 Worker 是否正常运行`);
         }
         return new Response("OK");
     }
+
 
     // 3. Rescue logic
     if (cbData?.startsWith("rescue_")) {
