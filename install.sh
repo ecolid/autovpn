@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.35"
+VERSION="v1.18.36"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -789,9 +789,18 @@ setup_guardian_bot() {
     local mode=$1
     log_info "正在配置 AutoVPN Guardian 集群服务..."
     
-    # 基础环境检查
+    # 基础环境检查（静默模式也必须执行）
     if ! command -v python3 &> /dev/null; then
         apt-get update &> /dev/null && apt-get install -y python3 python3-requests &> /dev/null
+    fi
+    
+    # 确保 requests 库已安装（修复 ModuleNotFoundError）
+    if ! python3 -c "import requests" &> /dev/null; then
+        log_info "正在安装 Python 依赖..."
+        apt-get update &> /dev/null && apt-get install -y python3-requests python3-pip &> /dev/null
+        if ! python3 -c "import requests" &> /dev/null; then
+            pip3 install requests &> /dev/null || true
+        fi
     fi
 
     # [v1.7.0] 集群信任建立与 SSH 密钥同步
