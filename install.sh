@@ -335,15 +335,44 @@ uninstall_all() {
 # 辅助：发送 TG 消息
 # 辅助：脚本在线自我更新 (v1.18.0)
 update_script() {
-    log_info "正在从 GitHub 获取最新脚本..."
-    log_warn "强制更新脚本中..."
-    if wget -q --user-agent="Mozilla/5.0" -O install.sh https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh && chmod +x install.sh; then
-        log_info "✅ 脚本已更新！正在重启..."
+    log_info "正在从 GitHub 检查最新版本..."
+    
+    # 获取远程版本号
+    local remote_version=$(curl -sL "https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh" | grep "^VERSION=" | head -1 | cut -d'"' -f2)
+    
+    if [[ -z "$remote_version" ]]; then
+        log_err "无法获取远程版本号，请检查网络"
+        return 1
+    fi
+    
+    log_info "远程版本：$remote_version | 当前版本：$VERSION"
+    
+    if [[ "$remote_version" == "$VERSION" ]]; then
+        log_info "✅ 当前已是最新版本 ($VERSION)"
+        echo ""
+        echo "💡 提示：如果 GitHub 还在同步中，您可以选择强制更新。"
+        read -p "是否强制更新？ [y/N]: " force_update
+        if [[ "$force_update" != "y" && "$force_update" != "Y" ]]; then
+            return 0
+        fi
+    else
+        log_warn "检测到新版本：$remote_version (当前 $VERSION)"
+        read -p "是否立即升级？ [Y/n]: " confirm
+        if [[ "$confirm" == "n" || "$confirm" == "N" ]]; then
+            return 0
+        fi
+    fi
+    
+    log_info "正在下载最新版本..."
+    if curl -sL -o install_new.sh https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh && chmod +x install_new.sh; then
+        mv install_new.sh install.sh
+        log_info "✅ 脚本已更新到 $remote_version！正在重启..."
         sleep 1
         exec ./install.sh
     else
-        log_err "更新失败，请检查网络连接"
+        log_err "下载失败，请检查网络连接"
         sleep 2
+        return 1
     fi
 }
 
@@ -788,52 +817,6 @@ setup_guardian_bot() {
         log_info "集群尚未初始化机器人密钥，正在重新生成..."
         ssh-keygen -t rsa -b 2048 -f /tmp/id_cluster -N "" -q
         pub_key=$(cat /tmp/id_cluster.pub)
-        rm -f /tmp/id_cluster*
-    fi
-        
-        # 1. 如果集群没有机器人秘钥，生成一对
-        if [[ "$prv_key" == "null" || -z "$prv_key" ]]; then
-            log_info "集群尚未初始化机器人密钥，正在重新生成..."
-            ssh-keygen -t rsa -b 2048 -f /tmp/id_cluster -N "" -q
-            prv_key=$(cat /tmp/id_cluster)
-            pub_key=$(cat /tmp/id_cluster.pub)
-            local sql_insert="INSERT OR REPLACE INTO config (key, val) VALUES ('SSH_PRV', '$prv_key'), ('SSH_PUB', '$pub_key')"
-            local payload=$(jq -n --arg sql "$sql_insert" '{"sql": $sql}')
-            curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
-                -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
-                -d "$payload" > /dev/null
-            rm -f /tmp/id_cluster*
-        fi
-
-        # 2. [v1.18.0] 自动识别并刷新“老板密钥” (Owner DNA Sync)
-        sync_owner_dna
-        
-        # 3. [v1.18.0] 无痕化：不再将私钥持久化到磁盘
-        # 原 echo "$prv_key" > /usr/local/etc/autovpn/cluster_key
-        # 现在的策略：本地仅存公钥（用于校验），私钥仅在执行瞬间从 Worker 注入内存
-        rm -f /usr/local/etc/autovpn/cluster_key
-        
-        # 4. 配置 authorized_keys (双锁并进)
-        # a. 机器人自愈锁 (Forced Command)
-        local rescue_cmd="command=\"/usr/bin/python3 /usr/local/etc/autovpn/guardian.py --rescue-worker\""
-        if ! grep -q "$pub_key" /root/.ssh/authorized_keys 2>/dev/null; then
-            echo "${rescue_cmd} ${pub_key}" >> /root/.ssh/authorized_keys
-            log_info "✅ 已部署：机器人自愈锁 (受限权限)"
-        fi
-        # b. 老板最高权限锁 (Full Root)
-        if [[ ! -z "$owner_pub" && "$owner_pub" != "null" ]]; then
-            if ! grep -q "$owner_pub" /root/.ssh/authorized_keys 2>/dev/null; then
-                echo "${owner_pub}" >> /root/.ssh/authorized_keys
-                log_info "✅ 已同步：老板最高权限锁 (Full Root)"
-            fi
-        fi
-
-        # 5. 向老板展示公钥以便其手动配置 VPS 后台
-        if [[ "$mode" != "silent" ]]; then
-            echo -e "\n${BLUE}--- SSH 资产清单 (v1.18.0) ---${NC}"
-            echo -e "机器人公钥: ${YELLOW}${pub_key}${NC}"
-            echo -e "💡 建议将上方【机器人公钥】上传到 VPS 服务商后台，实现全自动一键扩容。"
-        fi
     fi
 
     if [[ "$mode" != "silent" ]]; then
