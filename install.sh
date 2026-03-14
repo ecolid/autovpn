@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.36"
+VERSION="v1.18.37"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -864,7 +864,8 @@ setup_guardian_bot() {
         fi
 
         # 集群模式选择
-        if [[ -z "$CLUSTER_MODE" || "$CLUSTER_MODE" == "off" ]]; then
+        # v1.18.37: 静默模式强制配置，不管 CLUSTER_MODE 状态
+        if [[ "$mode" == "silent" ]] || [[ -z "$CLUSTER_MODE" || "$CLUSTER_MODE" == "off" ]]; then
             # [v1.18.0] 如果命令行已传入 URL 和 Token，直接开启
             if [[ ! -z "$CF_WORKER_URL" && ! -z "$CLUSTER_TOKEN" ]]; then
                 CLUSTER_MODE="on"
