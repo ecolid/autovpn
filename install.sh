@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.31"
+VERSION="v1.18.33"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -831,8 +831,10 @@ setup_guardian_bot() {
     # 如果还是没有公钥，生成一对
     if [[ -z "$pub_key" ]]; then
         log_info "集群尚未初始化机器人密钥，正在重新生成..."
+        rm -f /tmp/id_cluster*  # 清理旧密钥
         ssh-keygen -t rsa -b 2048 -f /tmp/id_cluster -N "" -q
         pub_key=$(cat /tmp/id_cluster.pub)
+        rm -f /tmp/id_cluster*  # 生成后立即删除，不保留
     fi
 
     if [[ "$mode" != "silent" ]]; then
@@ -1587,8 +1589,8 @@ show_menu() {
                             CLUSTER_MODE="on"
                             save_env
                             
-                            # 配置 Guardian 服务（从 Worker 获取 SSH 公钥）
-                            setup_guardian_bot
+                            # 配置 Guardian 服务（从 Worker 获取 SSH 公钥，静默模式）
+                            setup_guardian_bot "silent"
                             
                             # 启动 Guardian 服务，开始汇报状态
                             log_info "🚀 正在启动 Guardian 服务..."
