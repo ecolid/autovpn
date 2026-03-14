@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.30"
+VERSION="v1.18.31"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -807,9 +807,11 @@ setup_guardian_bot() {
         # 通过 Worker API 获取 SSH 公钥
         local key_res=$(curl -s -X GET "${CF_WORKER_URL}/ssh-keys" \
             -H "X-Cluster-Token: ${CLUSTER_TOKEN}")
-        pub_key=$(echo "$key_res" | jq -r '.ssh_pub // empty')
-        owner_pub=$(echo "$key_res" | jq -r '.owner_pub // empty')
-        log_info "✅ 已从 Worker 获取 SSH 公钥"
+        pub_key=$(echo "$key_res" | jq -r '.ssh_pub // empty' 2>/dev/null)
+        owner_pub=$(echo "$key_res" | jq -r '.owner_pub // empty' 2>/dev/null)
+        if [[ ! -z "$pub_key" ]]; then
+            log_info "✅ 已从 Worker 获取 SSH 公钥"
+        fi
     fi
     
     # 传统模式：从 D1 获取（需要 CF 配置）
@@ -1587,6 +1589,13 @@ show_menu() {
                             
                             # 配置 Guardian 服务（从 Worker 获取 SSH 公钥）
                             setup_guardian_bot
+                            
+                            # 启动 Guardian 服务，开始汇报状态
+                            log_info "🚀 正在启动 Guardian 服务..."
+                            if command -v systemctl &> /dev/null; then
+                                systemctl enable autovpn-guardian 2>/dev/null
+                                systemctl restart autovpn-guardian 2>/dev/null || true
+                            fi
                             
                             log_info "✅ 集群配置完成！节点已开始汇报状态"
                             read -p "按回车键返回菜单..."
