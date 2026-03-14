@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.33";
+const VERSION = "v1.18.34";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -192,12 +192,13 @@ export default {
             const isSelected = node ? node.is_selected : 0;
 
             await env.DB.prepare(`
-                INSERT INTO nodes (id, cpu, mem_pct, v, t, state, health, traffic_total, quality, ip, alert_sent, is_selected) 
-                VALUES (?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, 0, ?)
+                INSERT INTO nodes (id, hostname, cpu, mem_pct, v, t, state, health, traffic_total, quality, ip, alert_sent, is_selected) 
+                VALUES (?, ?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, 0, ?)
                 ON CONFLICT(id) DO UPDATE SET 
+                hostname=COALESCE(EXCLUDED.hostname, nodes.hostname),
                 cpu=EXCLUDED.cpu, mem_pct=EXCLUDED.mem_pct, v=EXCLUDED.v, t=EXCLUDED.t, state='online', health=EXCLUDED.health, 
                 traffic_total=EXCLUDED.traffic_total, quality=EXCLUDED.quality, ip=EXCLUDED.ip, alert_sent=0
-            `).bind(data.id, data.cpu, data.mem_pct, data.v, now, healthStr, trafficStr, qualityStr, data.ip || '0.0.0.0', isSelected).run();
+            `).bind(data.id, data.hostname, data.cpu, data.mem_pct, data.v, now, healthStr, trafficStr, qualityStr, data.ip || '0.0.0.0', isSelected).run();
 
             // 每小时整点存一个持久快照 (Analytics)
             if (now % 3600 < 15) {
@@ -342,7 +343,7 @@ async function handleTelegramUpdate(update, env) {
             const l = h.loop === "OK" ? "🟢" : "🔴";
             const qStr = `🇨🇳${q.china?.lat || "--"}ms | 🌐${q.global?.lat || "--"}ms`;
 
-            res += `🌩️ <b>${s.id}</b> [${st}] ${sel}\n`;
+            res += `🌩️ <b>${s.hostname || s.id}</b> [${st}] ${sel}\n`;
             res += `├ IP: <code>${s.ip}</code> | v${s.v}\n`;
             res += `├ 指标: X:${x} N:${n} W:${w} L:${l} | ${qStr}\n`;
             res += `├ 流量: 🔼 ${upGB}GB | 🔽 ${downGB}GB\n`;
