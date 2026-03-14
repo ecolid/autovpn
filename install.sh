@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.34"
+VERSION="v1.18.35"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -1076,7 +1076,12 @@ EOF
     ln -sf "$target_script" /usr/local/bin/autovpn
     
     systemctl daemon-reload
-    systemctl enable autovpn-guardian && systemctl restart autovpn-guardian
+    if systemctl enable autovpn-guardian && systemctl restart autovpn-guardian; then
+        log_info "✅ Guardian 服务已启动并启用"
+    else
+        log_err "❌ Guardian 服务启动失败！请检查日志：journalctl -u autovpn-guardian"
+        return 1
+    fi
     
     log_info "✅ Guardian 集群服务与全局指令已刷新"
     
@@ -1590,25 +1595,11 @@ show_menu() {
                             save_env
                             
                             # 配置 Guardian 服务（从 Worker 获取 SSH 公钥，静默模式）
-                            setup_guardian_bot "silent"
-                            
-                            # 启动 Guardian 服务，开始汇报状态
-                            log_info "🚀 正在启动 Guardian 服务..."
-                            local guardian_started=0
-                            if command -v systemctl &> /dev/null; then
-                                systemctl enable autovpn-guardian 2>/dev/null && \
-                                systemctl restart autovpn-guardian 2>/dev/null && \
-                                sleep 2 && \
-                                systemctl is-active --quiet autovpn-guardian && \
-                                guardian_started=1
-                            fi
-                            
-                            if [[ $guardian_started -eq 1 ]]; then
+                            if setup_guardian_bot "silent"; then
                                 log_info "✅ 集群配置完成！节点已开始汇报状态"
                                 log_info "💡 提示：等待 10 秒后，在 Telegram Bot 查看节点状态"
                             else
-                                log_err "❌ Guardian 服务启动失败！节点无法汇报状态"
-                                log_err "💡 请手动执行：systemctl start autovpn-guardian"
+                                log_err "❌ Guardian 服务配置失败！节点无法加入集群"
                             fi
                             read -p "按回车键返回菜单..."
                         else
