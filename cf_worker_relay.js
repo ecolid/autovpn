@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.71";
+const VERSION = "v1.18.72";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -162,6 +162,17 @@ export default {
                     v: node.v,
                     t: node.t
                 }));
+            }
+            
+            if (action === "delete") {
+                // 删除节点（用于配对失败时清理）
+                const nodeId = body.node_id;
+                if (!nodeId) {
+                    return new Response(JSON.stringify({ error: "缺少 node_id 参数" }));
+                }
+                
+                await env.DB.prepare("DELETE FROM nodes WHERE id = ?").bind(nodeId).run();
+                return new Response(JSON.stringify({ success: true, message: "节点已删除" }));
             }
             
             return new Response(JSON.stringify({ error: "未知操作" }));

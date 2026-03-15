@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.70"
+VERSION="v1.18.72"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -1727,6 +1727,22 @@ show_menu() {
                                 else
                                     log_err "❌ 节点未能成功汇报，配对失败"
                                     log_info "请检查：journalctl -u autovpn-guardian -n 30"
+                                    
+                                    # [v1.18.72] 验证失败时，清理节点记录并停止 guardian
+                                    log_info "正在清理失败的节点记录..."
+                                    
+                                    # 调用 Worker 删除节点
+                                    curl -s -X POST "${CF_WORKER_URL}/pair" \
+                                        -H "Content-Type: application/json" \
+                                        -H "X-Cluster-Token: ${CLUSTER_TOKEN}" \
+                                        -d "{\"action\": \"delete\", \"node_id\": \"$NODE_ID\"}" > /dev/null
+                                    
+                                    # 停止并禁用 guardian 服务
+                                    systemctl stop autovpn-guardian
+                                    systemctl disable autovpn-guardian
+                                    
+                                    log_info "✅ 已停止 guardian 服务并清理节点记录"
+                                    log_info "💡 请排查问题后重新尝试配对"
                                 fi
                             else
                                 log_err "❌ Guardian 服务配置失败！节点无法加入集群"
