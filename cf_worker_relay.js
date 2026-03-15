@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.57";
+const VERSION = "v1.18.58";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -526,14 +526,17 @@ async function handleTelegramUpdate(update, env) {
 
     if (cbData === "generate_pair") {
         try {
-            let cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
-            // [v1.18.52] 二次清理，确保配对码里的 URL 干净
-            cfWorkerUrl = (cfWorkerUrl || "").replace(/[`'\s]/g, "").trim();
+            // [v1.18.58] 每次生成新配对码时，强制创建新的干净 URL 记录，删除旧记录
+            const cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
+            const cleanUrl = (cfWorkerUrl || "").replace(/[`'\s]/g, "").trim();
             const clusterToken = await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN;
+            
+            // 强制覆盖 D1 中的 URL 为干净版本
+            await env.DB.prepare("UPDATE config SET val = ? WHERE key = 'CF_WORKER_URL'").bind(cleanUrl).run();
             
             // 生成加密配对码（包含 URL + Token + 过期时间）
             const data = {
-                url: cfWorkerUrl,
+                url: cleanUrl,
                 token: clusterToken,
                 expire: Date.now() + 300000 // 5 分钟
             };
@@ -549,7 +552,9 @@ async function handleTelegramUpdate(update, env) {
 在新 VPS 执行:
 <code>autovpn</code>
 选择 8 - 2
-粘贴上方配对码即可`;
+粘贴上方配对码即可
+
+✅ D1 数据库已刷新，URL 已净化`;
             await sendTelegram(BOT_TOKEN, CHAT_ID, joinInfo);
         } catch (e) {
             await sendTelegram(BOT_TOKEN, CHAT_ID, `❌ 生成失败：${e.message}`);
