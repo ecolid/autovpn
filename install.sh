@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.56"
+VERSION="v1.18.61"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -993,8 +993,13 @@ def get_status_data(tid=None, res=None):
     if not ip or len(ip) < 7:
         ip = "0.0.0.0"
     data = {
-        "id": NODE_ID, "cpu": cpu or "0", "mem_pct": mem or "0", "v": VERSION, 
-        "h": check_health(), "ip": ip,
+        "id": NODE_ID, 
+        "hostname": socket.gethostname(),  # [v1.18.61] 自动上报主机名
+        "cpu": cpu or "0", 
+        "mem_pct": mem or "0", 
+        "v": VERSION, 
+        "h": check_health(), 
+        "ip": ip,
         "traff": get_traffic(),
         "qual": {
             "china": measure_quality("223.5.5.5"),
