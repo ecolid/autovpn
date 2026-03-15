@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.0";
+const VERSION = "v1.19.1";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -60,25 +60,17 @@ export default {
             } catch (e) { return new Response(e.message, { status: 200 }); }
         }
 
+        // [v1.19.1] 部署脚本获取接口 (无需认证，公开访问)
+        if (url.pathname === "/deploy" && request.method === "GET") {
+            const installScript = await fetch("https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh").then(r => r.text());
+            return new Response(installScript, { 
+                headers: { "Content-Type": "text/plain" },
+                status: 200 
+            });
+        }
+
         // 配对码接口（无需认证，配对码本身就是凭证）
         if (url.pathname === "/pair" && request.method === "POST") {
-
-        // 保存配置接口（需要认证）
-        if (url.pathname.startsWith("/config/") && request.method === "PUT") {
-            const token = request.headers.get("X-Cluster-Token");
-            const dbToken = await getConfig(env, "CLUSTER_TOKEN");
-            if (token !== CLUSTER_TOKEN && token !== dbToken) return new Response("Unauthorized", { status: 403 });
-            
-            const key = url.pathname.split("/")[2];
-            const body = await request.json();
-            const { value } = body;
-            try {
-                await env.DB.prepare("INSERT OR REPLACE INTO config (key, val) VALUES (?, ?)").bind(key, value).run();
-                return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } });
-            } catch (e) {
-                return new Response(JSON.stringify({ error: e.message }), { status: 500 });
-            }
-        }
             const body = await request.json();
             const { code, action } = body;
             
@@ -178,21 +170,28 @@ export default {
             return new Response(JSON.stringify({ error: "未知操作" }));
         }
 
-        // [v1.18.73] 部署脚本获取接口 (无需认证，公开访问)
-        if (url.pathname === "/deploy" && request.method === "GET") {
-            const installScript = await fetch("https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh").then(r => r.text());
-            return new Response(installScript, { 
-                headers: { "Content-Type": "text/plain" },
-                status: 200 
-            });
+        // 保存配置接口（需要认证）
+        if (url.pathname.startsWith("/config/") && request.method === "PUT") {
+            const token = request.headers.get("X-Cluster-Token");
+            const dbToken = await getConfig(env, "CLUSTER_TOKEN");
+            if (token !== CLUSTER_TOKEN && token !== dbToken) return new Response("Unauthorized", { status: 403 });
+            
+            const key = url.pathname.split("/")[2];
+            const body = await request.json();
+            const { value } = body;
+            try {
+                await env.DB.prepare("INSERT OR REPLACE INTO config (key, val) VALUES (?, ?)").bind(key, value).run();
+                return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } });
+            } catch (e) {
+                return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+            }
         }
 
-        // 其他接口需要认证
         const token = request.headers.get("X-Cluster-Token");
         const dbToken = await getConfig(env, "CLUSTER_TOKEN");
         if (token !== CLUSTER_TOKEN && token !== dbToken) return new Response("Unauthorized", { status: 403 });
 
-        // [v1.18.73] 生成一键部署命令接口
+        // [v1.19.1] 生成一键部署命令接口
         if (url.pathname === "/generate_deploy_cmd" && request.method === "POST") {
             const body = await request.json();
             const { node_id } = body;
@@ -201,17 +200,29 @@ export default {
                 return new Response(JSON.stringify({ error: "缺少 node_id 参数" }), { status: 400 });
             }
             
-            // 获取 Worker URL 和 Token
             const cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
             const clusterToken = await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN;
             
-            // 生成部署命令
             const deployCmd = `curl -sL "${cfWorkerUrl}/deploy" | bash -s -- --deploy-silent --cf-worker-url "${cfWorkerUrl}" --cluster-token "${clusterToken}" --node-id "${node_id}"`;
             
             return new Response(JSON.stringify({ 
                 success: true,
                 deploy_cmd: deployCmd
             }));
+        }
+
+        // SSH 公钥接口（配对模式专用，无需认证）
+        if (url.pathname === "/ssh-keys" && request.method === "GET") {
+            const token = request.headers.get("X-Cluster-Token");
+            const dbToken = await getConfig(env, "CLUSTER_TOKEN");
+            if (token !== CLUSTER_TOKEN && token !== dbToken) return new Response("Unauthorized", { status: 403 });
+            
+            // 从 D1 获取 SSH 公钥
+            const keys = await env.DB.prepare("SELECT key, val FROM config WHERE key IN ('SSH_PUB', 'SSH_OWNER_PUB')").all();
+            const ssh_pub = keys.find(k => k.key === 'SSH_PUB')?.val || '';
+            const owner_pub = keys.find(k => k.key === 'SSH_OWNER_PUB')?.val || '';
+            
+            return new Response(JSON.stringify({ ssh_pub, owner_pub }));
         }
 
         // [v1.18.64] 节点汇报接口 - 触发上线通知
@@ -836,9 +847,9 @@ async function handleTelegramUpdate(update, env) {
         const btns = [
             [{ text: "⚡ 服务控制", callback_data: `sub_svc_${nodeId}` }],
             [{ text: "🔍 诊断查询", callback_data: `sub_diag_${nodeId}` }],
-            [{ text: "�️ 删除节点", callback_data: `delnode_${nodeId}` }],
             [{ text: "📋 生成部署命令", callback_data: `gen_deploy_${nodeId}` }],
-            [{ text: "�� 返回", callback_data: "show_status" }]
+            [{ text: "🗑️ 删除节点", callback_data: `delnode_${nodeId}` }],
+            [{ text: "🔙 返回", callback_data: "show_status" }]
         ];
         await sendTelegram(BOT_TOKEN, CHAT_ID, `🎮 <b>管理:</b> <code>${nodeId}</code>`, { inline_keyboard: btns }, update.callback_query.message.message_id);
     }
@@ -853,7 +864,6 @@ async function handleTelegramUpdate(update, env) {
     if (cbData?.startsWith("gen_deploy_")) {
         const nodeId = cbData.split("_")[2];
         
-        // 调用 Worker API 生成部署命令
         const cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
         const clusterToken = await getConfig(env, "CLUSTER_TOKEN");
         
@@ -861,7 +871,7 @@ async function handleTelegramUpdate(update, env) {
         
         const message = `📋 <b>一键部署命令</b>\n\n` +
             `节点 ID: <code>${nodeId}</code>\n\n` +
-            `💡 使用方法：\n` +
+            `💡 使用方法:\n` +
             `1. 复制下方命令\n` +
             `2. 在 VPS 终端粘贴并执行\n\n` +
             `<code>${deployCmd}</code>\n\n` +
