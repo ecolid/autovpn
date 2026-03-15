@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.68"
+VERSION="v1.18.69"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -1693,20 +1693,40 @@ show_menu() {
                             if setup_guardian_bot "silent"; then
                                 log_info "✅ 集群配置完成！节点已开始汇报状态"
                                 
-                                # [v1.18.67] 等待 guardian 第一次汇报（最多 15 秒）
-                                log_info "正在等待 guardian 第一次汇报..."
-                                sleep 5
+                                # [v1.18.68] 等待 guardian 第一次汇报并验证（最多 30 秒）
+                                log_info "正在等待 guardian 第一次汇报并验证..."
+                                local verify_success=false
                                 
-                                # 检查 guardian 进程
-                                if pgrep -f "guardian.py" > /dev/null; then
-                                    log_info "✅ guardian 进程正在运行"
+                                for i in {1..6}; do
+                                    sleep 5
+                                    
+                                    # 调用 Worker 检查节点状态
+                                    local check_res=$(curl -s -X POST "${CF_WORKER_URL}/pair" \
+                                        -H "Content-Type: application/json" \
+                                        -d "{\"action\": \"check\", \"node_id\": \"$NODE_ID\"}")
+                                    
+                                    local node_status=$(echo "$check_res" | jq -r '.status' 2>/dev/null)
+                                    local node_ip=$(echo "$check_res" | jq -r '.ip' 2>/dev/null)
+                                    local node_cpu=$(echo "$check_res" | jq -r '.cpu' 2>/dev/null)
+                                    local node_hostname=$(echo "$check_res" | jq -r '.hostname' 2>/dev/null)
+                                    
+                                    log_info "[第${i}次检查] IP=${node_ip:-null}, CPU=${node_cpu:-null}, Hostname=${node_hostname:-null}"
+                                    
+                                    # 验证关键字段
+                                    if [[ "$node_ip" != "null" && "$node_ip" != "0.0.0.0" && -n "$node_cpu" && "$node_hostname" != "null" ]]; then
+                                        verify_success=true
+                                        log_info "✅ 节点验证成功！"
+                                        break
+                                    fi
+                                done
+                                
+                                if [[ "$verify_success" == "true" ]]; then
+                                    log_info "✅ 配对圆满完成！节点已正式上线"
+                                    log_info "💡 提示：在 Telegram Bot 发送 /status 查看节点状态"
                                 else
-                                    log_warn "⚠️ guardian 进程未运行，尝试重启..."
-                                    systemctl restart autovpn-guardian
-                                    sleep 3
+                                    log_err "❌ 节点未能成功汇报，配对失败"
+                                    log_info "请检查：journalctl -u autovpn-guardian -n 30"
                                 fi
-                                
-                                log_info "💡 提示：等待 10 秒后，在 Telegram Bot 查看节点状态"
                             else
                                 log_err "❌ Guardian 服务配置失败！节点无法加入集群"
                             fi

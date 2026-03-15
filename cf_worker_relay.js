@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.68";
+const VERSION = "v1.18.69";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -139,6 +139,28 @@ export default {
                     cf_worker_url: (data.url || "").replace(/[`'" \t\n\r]/g, "").trim(),
                     cluster_token: data.token,
                     message: "✅ 注册成功！请启动 guardian 开始汇报状态"
+                }));
+            }
+            
+            if (action === "check") {
+                // 检查节点状态（用于 install.sh 验证）
+                const nodeId = body.node_id;
+                if (!nodeId) {
+                    return new Response(JSON.stringify({ error: "缺少 node_id 参数" }));
+                }
+                
+                const node = await env.DB.prepare("SELECT * FROM nodes WHERE id = ?").bind(nodeId).first();
+                if (!node) {
+                    return new Response(JSON.stringify({ error: "节点不存在" }));
+                }
+                
+                return new Response(JSON.stringify({
+                    status: node.state,
+                    ip: node.ip,
+                    cpu: node.cpu,
+                    hostname: node.hostname,
+                    v: node.v,
+                    t: node.t
                 }));
             }
             
