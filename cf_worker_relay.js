@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.42";
+const VERSION = "v1.18.43";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -691,7 +691,14 @@ async function showWizardPreview(env, ip, botToken, chatId, editId = null) {
     await sendTelegram(botToken, chatId, res, { inline_keyboard: btns }, editId);
 }
 
-async function getConfig(env, key) { return await env.DB.prepare("SELECT val FROM config WHERE key = ?").bind(key).first("val"); }
+async function getConfig(env, key) { 
+    const val = await env.DB.prepare("SELECT val FROM config WHERE key = ?").bind(key).first("val");
+    // 自动清理 URL 中的反引号、引号和空白字符
+    if (typeof val === 'string' && (key.includes('URL') || key.includes('DOMAIN'))) {
+        return val.replace(/[`'\s]/g, "").trim();
+    }
+    return val;
+}
 function genBar(p) { let f = Math.round((p / 100) * 8); return "█".repeat(f) + "░".repeat(8 - f) + ` ${p}%`; }
 
 function parseVless(link) {
