@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.40";
+const VERSION = "v1.18.41";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -264,17 +264,6 @@ export default {
         
         // 清理过期配对码
         await env.DB.prepare("DELETE FROM pair_codes WHERE expire_at < ?").bind(Date.now()).run();
-        
-        // 清理长期失联节点（超过 5 分钟未汇报）
-        const staleThreshold = Date.now() - (5 * 60 * 1000);
-        const staleNodes = await env.DB.prepare("SELECT id FROM nodes WHERE state = 'online' AND t < ?")
-            .bind(Math.floor(staleThreshold / 1000)).all();
-        
-        if (staleNodes.results && staleNodes.results.length > 0) {
-            const staleIds = staleNodes.results.map(n => n.id).join(",");
-            await env.DB.prepare(`DELETE FROM nodes WHERE id IN (${staleIds})`).run();
-            console.log(`[Guardian] 清理了 ${staleNodes.results.length} 个失联节点: ${staleIds}`);
-        }
         
         if (!BOT_TOKEN || !CHAT_ID) return;
         const now = Math.floor(Date.now() / 1000);
@@ -664,8 +653,20 @@ async function handleTelegramUpdate(update, env) {
 
     if (cbData?.startsWith("mgr_")) {
         const nodeId = cbData.split("_")[1];
-        const btns = [[{ text: "⚡ 服务控制", callback_data: `sub_svc_${nodeId}` }], [{ text: "🔍 诊断查询", callback_data: `sub_diag_${nodeId}` }], [{ text: "🔙 返回", callback_data: "show_status" }]];
+        const btns = [
+            [{ text: "⚡ 服务控制", callback_data: `sub_svc_${nodeId}` }],
+            [{ text: "🔍 诊断查询", callback_data: `sub_diag_${nodeId}` }],
+            [{ text: "�️ 删除节点", callback_data: `delnode_${nodeId}` }],
+            [{ text: "�� 返回", callback_data: "show_status" }]
+        ];
         await sendTelegram(BOT_TOKEN, CHAT_ID, `🎮 <b>管理:</b> <code>${nodeId}</code>`, { inline_keyboard: btns }, update.callback_query.message.message_id);
+    }
+
+    if (cbData?.startsWith("delnode_")) {
+        const nodeId = cbData.split("_")[1];
+        await env.DB.prepare("DELETE FROM nodes WHERE id = ?").bind(nodeId).run();
+        await sendTelegram(BOT_TOKEN, CHAT_ID, `✅ 节点 <code>${nodeId}</code> 已从集群中删除。`);
+        return await handleTelegramUpdate({ callback_query: { data: "show_status", message: msg } }, env);
     }
 
     return new Response("OK");
