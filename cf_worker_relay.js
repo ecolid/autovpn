@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.56";
+const VERSION = "v1.18.57";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -498,7 +498,10 @@ async function handleTelegramUpdate(update, env) {
 
             const cfData = await cfRes.json();
             if (cfData.success) {
-                const info = `✅ <b>指挥部进化成功!</b>\n\n旧版本：v${currentVersion}\n新版本：v${githubVersion}\n\n脚本已同步至云端，模块已重载。`;
+                // [v1.18.57] Worker 更新成功后，强制清理 D1 里的 URL
+                await env.DB.prepare("UPDATE config SET val = TRIM(REPLACE(REPLACE(REPLACE(val, '`', ''), '''', ''), ' ', '')) WHERE key = 'CF_WORKER_URL'").run();
+                
+                const info = `✅ <b>指挥部进化成功!</b>\n\n旧版本：v${currentVersion}\n新版本：v${githubVersion}\n\n脚本已同步至云端，模块已重载。\n\n✅ D1 数据库已清理，配对码 URL 将保持干净`;
                 const btns = [[{ text: "🔙 返回", callback_data: "show_security" }]];
                 await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns });
             } else {
