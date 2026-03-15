@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.41";
+const VERSION = "v1.18.42";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -141,7 +141,7 @@ export default {
                 return new Response(JSON.stringify({ 
                     success: true, 
                     node_id: nodeId,
-                    cf_worker_url: (data.url || "").trim(),
+                    cf_worker_url: (data.url || "").replace(/[`'\s]/g, "").trim(),
                     cluster_token: data.token,
                     message: "✅ 注册成功！你已加入集群，请开始汇报状态"
                 }));
@@ -443,7 +443,7 @@ async function handleTelegramUpdate(update, env) {
     }
 
     if (cbData === "join_cmd") {
-        const url = (await getConfig(env, "CF_WORKER_URL")) || "YOUR_WORKER_URL";
+        const url = (await getConfig(env, "CF_WORKER_URL") || "YOUR_WORKER_URL").replace(/[`'\s]/g, "").trim();
         const cmd = `curl -sL https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh | bash -s -- --silent --cf-worker-url ${url} --cluster-token ${CLUSTER_TOKEN}`;
         const info = `📋 <b>一键加入集群指令</b>\n\n在新服务器执行下方命令即可上线：\n\n<code>${cmd}</code>\n\n💡 <i>提示：该指令包含中枢认证 Token。</i>`;
         const btns = [[{ text: "🔙 返回安全中心延时", callback_data: "show_security" }]];
