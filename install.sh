@@ -973,9 +973,17 @@ def check_health():
 def get_status_data(tid=None, res=None):
     cpu = run_shell("top -bn1 | grep 'Cpu(s)' | awk '{print $2}'")
     mem = run_shell("free | grep Mem | awk '{print $3/$2 * 100.0}'")
+    # 获取 IP，使用多个备用源
+    ip = run_shell("curl -s https://api.ipify.org")
+    if not ip or len(ip) < 7:
+        ip = run_shell("curl -s https://ifconfig.me")
+    if not ip or len(ip) < 7:
+        ip = run_shell("curl -s https://icanhazip.com")
+    if not ip or len(ip) < 7:
+        ip = "0.0.0.0"
     data = {
         "id": NODE_ID, "cpu": cpu or "0", "mem_pct": mem or "0", "v": VERSION, 
-        "h": check_health(), "ip": run_shell("curl -s https://api.ipify.org"),
+        "h": check_health(), "ip": ip,
         "traff": get_traffic(),
         "qual": {
             "china": measure_quality("223.5.5.5"),
