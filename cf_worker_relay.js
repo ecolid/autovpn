@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.62";
+const VERSION = "v1.18.63";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -138,24 +138,52 @@ export default {
                 if (BOT_TOKEN && CHAT_ID) {
                     let reported = false;
                     let nodeData = null;
+                    let lastCheckInfo = "";
                     
                     // 轮询检查节点汇报（最多 30 秒）
                     for (let i = 0; i < 6; i++) {
                         await new Promise(resolve => setTimeout(resolve, 5000)); // 等待 5 秒
                         
                         nodeData = await env.DB.prepare("SELECT * FROM nodes WHERE id = ?").bind(nodeId).first();
-                        if (nodeData && nodeData.ip && nodeData.ip !== '0.0.0.0' && nodeData.cpu) {
-                            reported = true;
-                            break;
+                        
+                        // 记录检查信息
+                        if (nodeData) {
+                            lastCheckInfo = `第${i+1}次检查：IP=${nodeData.ip || 'null'}, CPU=${nodeData.cpu || 'null'}, 状态=${nodeData.state}`;
+                            
+                            if (nodeData.ip && nodeData.ip !== '0.0.0.0' && nodeData.cpu) {
+                                reported = true;
+                                break;
+                            }
+                        } else {
+                            lastCheckInfo = `第${i+1}次检查：节点记录不存在`;
                         }
                     }
                     
                     if (!reported || !nodeData) {
                         // 节点未汇报，删除记录并返回错误
                         await env.DB.prepare("DELETE FROM nodes WHERE id = ?").bind(nodeId).run();
+                        
+                        // 构建详细错误信息
+                        let errorMsg = "节点未在 30 秒内汇报状态，配对失败。\n\n";
+                        errorMsg += "🔍 诊断信息:\n";
+                        errorMsg += `├ 节点 ID: ${nodeId}\n`;
+                        errorMsg += `├ 注册时间：${new Date(registerTime * 1000).toLocaleString('zh-CN')}\n`;
+                        errorMsg += `├ 最后检查：${lastCheckInfo}\n`;
+                        errorMsg += `└ 可能原因:\n`;
+                        errorMsg += `   1. VPS 无法访问 Worker URL（网络问题）\n`;
+                        errorMsg += `   2. guardian.py 未启动或配置错误\n`;
+                        errorMsg += `   3. CLUSTER_TOKEN 不匹配\n`;
+                        errorMsg += `   4. VPS 系统时间不正确\n\n`;
+                        errorMsg += "💡 建议操作:\n";
+                        errorMsg += "1. 检查 VPS 网络连接：curl -I https://autovpn-relay.ealth6.workers.dev\n";
+                        errorMsg += "2. 检查 guardian 状态：systemctl status autovpn-guardian\n";
+                        errorMsg += "3. 查看 guardian 日志：journalctl -u autovpn-guardian -n 30\n";
+                        errorMsg += "4. 确认系统时间：date\n";
+                        errorMsg += "5. 重新生成配对码并重试";
+                        
                         return new Response(JSON.stringify({ 
                             success: false, 
-                            error: "节点未在 30 秒内汇报状态，配对失败。请检查网络连接或重新尝试"
+                            error: errorMsg
                         }));
                     }
                     
