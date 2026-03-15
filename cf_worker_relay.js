@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.50";
+const VERSION = "v1.18.51";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -439,21 +439,11 @@ async function handleTelegramUpdate(update, env) {
 
         const btns = [
             [{ text: "🔄 升级指挥部 (Self-Update)", callback_data: "self_update_worker" }],
-            [{ text: "➕ 获取一键加入指令", callback_data: "join_cmd" }],
             [{ text: "🔗 生成配对码", callback_data: "generate_pair" }],
             [{ text: "🔄 轮换 SSH 密钥", callback_data: "rotate_ssh" }],
             [{ text: "🔙 返回主菜单", callback_data: "show_main" }]
         ];
         await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns }, update.callback_query?.message.message_id);
-        return new Response("OK");
-    }
-
-    if (cbData === "join_cmd") {
-        const url = (await getConfig(env, "CF_WORKER_URL") || "YOUR_WORKER_URL").replace(/[`'\s]/g, "").trim();
-        const cmd = `curl -sL https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh | bash -s -- --silent --cf-worker-url ${url} --cluster-token ${CLUSTER_TOKEN}`;
-        const info = `📋 <b>一键加入集群指令</b>\n\n在新服务器执行下方命令即可上线：\n\n<code>${cmd}</code>\n\n💡 <i>提示：该指令包含中枢认证 Token。</i>`;
-        const btns = [[{ text: "🔙 返回安全中心延时", callback_data: "show_security" }]];
-        await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns }, msg.message_id);
         return new Response("OK");
     }
 
