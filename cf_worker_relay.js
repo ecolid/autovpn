@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.58";
+const VERSION = "v1.18.59";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -88,11 +88,12 @@ export default {
                 const dbToken = await getConfig(env, "CLUSTER_TOKEN");
                 if (token !== CLUSTER_TOKEN && token !== dbToken) return new Response("Unauthorized", { status: 403 });
                 
-                // 生成加密配对码（包含 URL + Token + 过期时间）
+                // [v1.18.58] 生成配对码时强制清理 URL
                 const cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
+                const cleanUrl = (cfWorkerUrl || "").replace(/[`'\s]/g, "").trim();
                 const clusterToken = await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN;
                 const data = {
-                    url: cfWorkerUrl,
+                    url: cleanUrl,
                     token: clusterToken,
                     expire: Date.now() + 300000 // 5 分钟
                 };
