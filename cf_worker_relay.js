@@ -178,11 +178,7 @@ export default {
             return new Response(JSON.stringify({ error: "未知操作" }));
         }
 
-        const token = request.headers.get("X-Cluster-Token");
-        const dbToken = await getConfig(env, "CLUSTER_TOKEN");
-        if (token !== CLUSTER_TOKEN && token !== dbToken) return new Response("Unauthorized", { status: 403 });
-
-        // [v1.18.73] 部署脚本获取接口
+        // [v1.18.73] 部署脚本获取接口 (无需认证，公开访问)
         if (url.pathname === "/deploy" && request.method === "GET") {
             const installScript = await fetch("https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh").then(r => r.text());
             return new Response(installScript, { 
@@ -190,6 +186,11 @@ export default {
                 status: 200 
             });
         }
+
+        // 其他接口需要认证
+        const token = request.headers.get("X-Cluster-Token");
+        const dbToken = await getConfig(env, "CLUSTER_TOKEN");
+        if (token !== CLUSTER_TOKEN && token !== dbToken) return new Response("Unauthorized", { status: 403 });
 
         // [v1.18.73] 生成一键部署命令接口
         if (url.pathname === "/generate_deploy_cmd" && request.method === "POST") {
