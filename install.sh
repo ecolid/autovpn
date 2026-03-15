@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.67"
+VERSION="v1.18.68"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -1692,6 +1692,20 @@ show_menu() {
                             # 配置 Guardian 服务（从 Worker 获取 SSH 公钥，静默模式）
                             if setup_guardian_bot "silent"; then
                                 log_info "✅ 集群配置完成！节点已开始汇报状态"
+                                
+                                # [v1.18.67] 等待 guardian 第一次汇报（最多 15 秒）
+                                log_info "正在等待 guardian 第一次汇报..."
+                                sleep 5
+                                
+                                # 检查 guardian 进程
+                                if pgrep -f "guardian.py" > /dev/null; then
+                                    log_info "✅ guardian 进程正在运行"
+                                else
+                                    log_warn "⚠️ guardian 进程未运行，尝试重启..."
+                                    systemctl restart autovpn-guardian
+                                    sleep 3
+                                fi
+                                
                                 log_info "💡 提示：等待 10 秒后，在 Telegram Bot 查看节点状态"
                             else
                                 log_err "❌ Guardian 服务配置失败！节点无法加入集群"
