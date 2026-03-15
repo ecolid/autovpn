@@ -31,6 +31,8 @@ while [[ $# -gt 0 ]]; do
         --cf-worker-url) CF_WORKER_URL="$2"; shift 2 ;;
         --cluster-token) CLUSTER_TOKEN="$2"; shift 2 ;;
         --pair) PAIR_CODE="$2"; shift 2 ;;
+        --deploy-silent) DEPLOY_SILENT=1; MODE="silent"; shift ;;
+        --node-id) NODE_ID="$2"; shift 2 ;;
         *) shift ;;
     esac
 done
@@ -1843,6 +1845,51 @@ main() {
         optimize_system
         setup_guardian_bot
         log_info "✅ 节点已成功加入集群！"
+        exit 0
+    fi
+    
+    # [v1.18.73] 一键部署模式：从 Worker 获取脚本并自动配置
+    if [[ "$DEPLOY_SILENT" == "1" ]]; then
+        log_info ">>> 检测到一键部署模式，正在自动配置集群..."
+        
+        if [[ -z "$CF_WORKER_URL" || -z "$CLUSTER_TOKEN" || -z "$NODE_ID" ]]; then
+            log_err "错误：一键部署模式需要提供 --cf-worker-url, --cluster-token 和 --node-id 参数"
+            exit 1
+        fi
+        
+        log_info "正在验证集群信息..."
+        local verify_res=$(curl -s -X POST "${CF_WORKER_URL}/pair" \
+            -H "Content-Type: application/json" \
+            -d "{\"action\": \"check\", \"node_id\": \"$NODE_ID\"}")
+        
+        if echo "$verify_res" | jq -e '.status' > /dev/null 2>&1; then
+            log_info "✅ 节点信息验证成功"
+        else
+            log_warn "⚠️ 节点尚未在集群中注册，将自动创建"
+        fi
+        
+        CLUSTER_MODE="on"
+        save_env
+        optimize_system
+        setup_guardian_bot
+        
+        # 等待 guardian 第一次汇报
+        log_info "正在等待节点上线..."
+        sleep 10
+        
+        local final_check=$(curl -s -X POST "${CF_WORKER_URL}/pair" \
+            -H "Content-Type: application/json" \
+            -d "{\"action\": \"check\", \"node_id\": \"$NODE_ID\"}")
+        
+        local node_ip=$(echo "$final_check" | jq -r '.ip' 2>/dev/null)
+        if [[ "$node_ip" != "null" && "$node_ip" != "0.0.0.0" ]]; then
+            log_info "✅ 节点已成功加入集群并上线！"
+            log_info "IP: $node_ip"
+        else
+            log_warn "⚠️ 节点配置完成但尚未汇报状态"
+            log_info "请检查：journalctl -u autovpn-guardian -n 30"
+        fi
+        
         exit 0
     fi
     # 如果是 BOT 自动更新，则跳备菜单

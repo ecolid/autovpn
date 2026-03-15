@@ -182,6 +182,37 @@ export default {
         const dbToken = await getConfig(env, "CLUSTER_TOKEN");
         if (token !== CLUSTER_TOKEN && token !== dbToken) return new Response("Unauthorized", { status: 403 });
 
+        // [v1.18.73] 部署脚本获取接口
+        if (url.pathname === "/deploy" && request.method === "GET") {
+            const installScript = await fetch("https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh").then(r => r.text());
+            return new Response(installScript, { 
+                headers: { "Content-Type": "text/plain" },
+                status: 200 
+            });
+        }
+
+        // [v1.18.73] 生成一键部署命令接口
+        if (url.pathname === "/generate_deploy_cmd" && request.method === "POST") {
+            const body = await request.json();
+            const { node_id } = body;
+            
+            if (!node_id) {
+                return new Response(JSON.stringify({ error: "缺少 node_id 参数" }), { status: 400 });
+            }
+            
+            // 获取 Worker URL 和 Token
+            const cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
+            const clusterToken = await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN;
+            
+            // 生成部署命令
+            const deployCmd = `curl -sL "${cfWorkerUrl}/deploy" | bash -s -- --deploy-silent --cf-worker-url "${cfWorkerUrl}" --cluster-token "${clusterToken}" --node-id "${node_id}"`;
+            
+            return new Response(JSON.stringify({ 
+                success: true,
+                deploy_cmd: deployCmd
+            }));
+        }
+
         // [v1.18.64] 节点汇报接口 - 触发上线通知
         if (url.pathname === "/report" && request.method === "POST") {
             const data = await request.json();
@@ -805,6 +836,7 @@ async function handleTelegramUpdate(update, env) {
             [{ text: "⚡ 服务控制", callback_data: `sub_svc_${nodeId}` }],
             [{ text: "🔍 诊断查询", callback_data: `sub_diag_${nodeId}` }],
             [{ text: "�️ 删除节点", callback_data: `delnode_${nodeId}` }],
+            [{ text: "📋 生成部署命令", callback_data: `gen_deploy_${nodeId}` }],
             [{ text: "�� 返回", callback_data: "show_status" }]
         ];
         await sendTelegram(BOT_TOKEN, CHAT_ID, `🎮 <b>管理:</b> <code>${nodeId}</code>`, { inline_keyboard: btns }, update.callback_query.message.message_id);
@@ -815,6 +847,27 @@ async function handleTelegramUpdate(update, env) {
         await env.DB.prepare("DELETE FROM nodes WHERE id = ?").bind(nodeId).run();
         await sendTelegram(BOT_TOKEN, CHAT_ID, `✅ 节点 <code>${nodeId}</code> 已从集群中删除。`);
         return await handleTelegramUpdate({ callback_query: { data: "show_status", message: msg } }, env);
+    }
+
+    if (cbData?.startsWith("gen_deploy_")) {
+        const nodeId = cbData.split("_")[2];
+        
+        // 调用 Worker API 生成部署命令
+        const cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
+        const clusterToken = await getConfig(env, "CLUSTER_TOKEN");
+        
+        const deployCmd = `curl -sL "${cfWorkerUrl}/deploy" | bash -s -- --deploy-silent --cf-worker-url "${cfWorkerUrl}" --cluster-token "${clusterToken}" --node-id "${nodeId}"`;
+        
+        const message = `📋 <b>一键部署命令</b>\n\n` +
+            `节点 ID: <code>${nodeId}</code>\n\n` +
+            `💡 使用方法：\n` +
+            `1. 复制下方命令\n` +
+            `2. 在 VPS 终端粘贴并执行\n\n` +
+            `<code>${deployCmd}</code>\n\n` +
+            `⚠️ 提示：长按消息即可复制命令`;
+        
+        const btns = [[{ text: "✅ 已复制", callback_data: "copy_deploy_cmd" }]];
+        await sendTelegram(BOT_TOKEN, CHAT_ID, message, { inline_keyboard: btns });
     }
 
     return new Response("OK");
