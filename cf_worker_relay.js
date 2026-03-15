@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.44";
+const VERSION = "v1.18.45";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -457,11 +457,33 @@ async function handleTelegramUpdate(update, env) {
         const d1Id = await getConfig(env, "D1_ID");
         if (!token || !account || !d1Id) return await sendTelegram(BOT_TOKEN, CHAT_ID, "❌ 错误: 云端配置缺失 (CF_TOKEN/ACCOUNT/D1_ID)，请先在 VPS 跑一次 8-2 同步信息。");
 
-        const statusMsg = await sendTelegram(BOT_TOKEN, CHAT_ID, "🔄 <b>指挥部进化启动</b>\n正在从 GitHub 拉取最新代码...");
         try {
+            // 1. 从 GitHub 获取最新版本
             const res = await fetch("https://raw.githubusercontent.com/ecolid/autovpn/main/cf_worker_relay.js");
             let code = await res.text();
-
+            
+            // 2. 提取 GitHub 版本号
+            const githubVersionMatch = code.match(/const VERSION = "([^"]+)"/);
+            const githubVersion = githubVersionMatch ? githubVersionMatch[1] : "unknown";
+            
+            // 3. 获取当前运行版本
+            const currentVersion = VERSION;
+            
+            // 4. 比较版本
+            if (githubVersion === currentVersion) {
+                // 已是最新版本
+                const info = `✅ <b>已是最新版本!</b>\n\n当前版本：<code>v${currentVersion}</code>\nGitHub 版本：<code>v${githubVersion}</code>\n\n💡 无需更新，但可以手动刷新检查`;
+                const btns = [
+                    [{ text: "🔄 强制刷新检查", callback_data: "self_update_worker" }],
+                    [{ text: "🔙 返回", callback_data: "show_security" }]
+                ];
+                await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns });
+                return new Response("OK");
+            }
+            
+            // 5. 有新版本，执行更新
+            await sendTelegram(BOT_TOKEN, CHAT_ID, `🔄 <b>指挥部进化启动</b>\n发现新版本：v${githubVersion}\n当前版本：v${currentVersion}\n\n正在从 GitHub 拉取代码...`);
+            
             // 保持版本兼容性：注入当前的 CLUSTER_TOKEN
             const clusterToken = await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN;
             code = code.replace(/const CLUSTER_TOKEN = ".*";/, `const CLUSTER_TOKEN = "${clusterToken}";`);
@@ -480,7 +502,9 @@ async function handleTelegramUpdate(update, env) {
 
             const cfData = await cfRes.json();
             if (cfData.success) {
-                await sendTelegram(BOT_TOKEN, CHAT_ID, "✅ <b>指挥部进化成功！</b>\n脚本已同步至云端，模块已重载。");
+                const info = `✅ <b>指挥部进化成功!</b>\n\n旧版本：v${currentVersion}\n新版本：v${githubVersion}\n\n脚本已同步至云端，模块已重载。`;
+                const btns = [[{ text: "🔙 返回", callback_data: "show_security" }]];
+                await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns });
             } else {
                 await sendTelegram(BOT_TOKEN, CHAT_ID, `❌ <b>进化失败: CF API 拒绝</b>\n<pre>${JSON.stringify(cfData.errors)}</pre>`);
             }
