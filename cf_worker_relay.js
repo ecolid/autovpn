@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.43";
+const VERSION = "v1.18.44";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -517,7 +517,7 @@ async function handleTelegramUpdate(update, env) {
             const joinInfo = `🔗 <b>配对码已生成!</b>
 
 配对码 (5 分钟有效):
-<code>${code}</code>
+<pre>${code}</pre>
 
 📋 <b>使用方式:</b>
 
