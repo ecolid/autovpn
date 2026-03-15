@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.48";
+const VERSION = "v1.18.49";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -125,17 +125,18 @@ export default {
                     VALUES (?, 'online', 0, 1, ?)
                 `).bind(nodeId, Math.floor(Date.now() / 1000)).run();
                 
+                // [v1.18.48] 配对成功时不通知，等节点第一次汇报时再通知（避免重复）
                 // 通知 Bot（如果配置了）
-                try {
-                    const BOT_TOKEN = await getConfig(env, "BOT_TOKEN");
-                    const CHAT_ID = await getConfig(env, "CHAT_ID");
-                    if (BOT_TOKEN && CHAT_ID) {
-                        await sendTelegram(BOT_TOKEN, CHAT_ID, 
-                            `🎉 <b>新节点加入集群!</b>\n节点 ID: <code>${nodeId}</code>\n已自动上线并开始汇报`);
-                    }
-                } catch (e) {
-                    // Bot 通知失败不影响注册
-                }
+                // try {
+                //     const BOT_TOKEN = await getConfig(env, "BOT_TOKEN");
+                //     const CHAT_ID = await getConfig(env, "CHAT_ID");
+                //     if (BOT_TOKEN && CHAT_ID) {
+                //         await sendTelegram(BOT_TOKEN, CHAT_ID, 
+                //             `🎉 <b>新节点加入集群!</b>\n节点 ID: <code>${nodeId}</code>\n已自动上线并开始汇报`);
+                //     }
+                // } catch (e) {
+                //     // Bot 通知失败不影响注册
+                // }
                 
                 // 返回集群配置给子节点
                 return new Response(JSON.stringify({ 
