@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.49";
+const VERSION = "v1.18.50";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -364,6 +364,7 @@ async function handleTelegramUpdate(update, env) {
         if (selectedCount > 0) {
             res += `\n📦 <b>当前已勾选 <code>${selectedCount}</code> 台设备</b>`;
             bottomBtns.unshift({ text: `🚀 批量升级 (${selectedCount})`, callback_data: "bulk_up" });
+            bottomBtns.unshift({ text: `🗑️ 批量删除 (${selectedCount})`, callback_data: "bulk_del" });
         }
         btns.push(bottomBtns);
         await sendTelegram(BOT_TOKEN, CHAT_ID, res, { inline_keyboard: btns }, update.callback_query?.message.message_id);
@@ -677,6 +678,39 @@ async function handleTelegramUpdate(update, env) {
         }
         await env.DB.prepare("UPDATE nodes SET is_selected = 0").run();
         await sendTelegram(BOT_TOKEN, CHAT_ID, `✅ 已成功向 <code>${selected.results.length}</code> 个节点下发升级指令。`);
+        return await handleTelegramUpdate({ callback_query: { data: "show_status", message: msg } }, env);
+    }
+
+    if (cbData === "bulk_del") {
+        const selected = await env.DB.prepare("SELECT id FROM nodes WHERE is_selected = 1").all();
+        if (!selected.results || selected.results.length === 0) {
+            await sendTelegram(BOT_TOKEN, CHAT_ID, "❌ 没有勾选的节点。");
+            return new Response("OK");
+        }
+        
+        // 先发送确认消息
+        const confirmMsg = `⚠️ <b>删除确认</b>\n\n即将删除 <code>${selected.results.length}</code> 个节点:\n\n${selected.results.map(n => `<code>${n.id}</code>`).join("\n")}\n\n<b>此操作不可恢复！</b>\n\n请点击下方按钮确认:`;
+        const btns = [
+            [{ text: "✅ 确认删除", callback_data: "bulk_del_confirm" }],
+            [{ text: "❌ 取消", callback_data: "show_status" }]
+        ];
+        await sendTelegram(BOT_TOKEN, CHAT_ID, confirmMsg, { inline_keyboard: btns });
+        return new Response("OK");
+    }
+
+    if (cbData === "bulk_del_confirm") {
+        const selected = await env.DB.prepare("SELECT id FROM nodes WHERE is_selected = 1").all();
+        if (!selected.results || selected.results.length === 0) {
+            await sendTelegram(BOT_TOKEN, CHAT_ID, "❌ 没有勾选的节点。");
+            return new Response("OK");
+        }
+        
+        const deletedIds = selected.results.map(n => n.id).join(", ");
+        for (const n of selected.results) {
+            await env.DB.prepare("DELETE FROM nodes WHERE id = ?").bind(n.id).run();
+        }
+        await env.DB.prepare("UPDATE nodes SET is_selected = 0").run();
+        await sendTelegram(BOT_TOKEN, CHAT_ID, `✅ 已成功删除 <code>${selected.results.length}</code> 个节点:\n<code>${deletedIds}</code>`);
         return await handleTelegramUpdate({ callback_query: { data: "show_status", message: msg } }, env);
     }
 
