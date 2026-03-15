@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.60";
+const VERSION = "v1.18.61";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -90,7 +90,7 @@ export default {
                 
                 // [v1.18.58] 生成配对码时强制清理 URL
                 const cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
-                const cleanUrl = (cfWorkerUrl || "").replace(/[`'\s]/g, "").trim();
+                const cleanUrl = (cfWorkerUrl || "").replace(/[`'" \t\n\r]/g, "").trim();
                 const clusterToken = await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN;
                 const data = {
                     url: cleanUrl,
@@ -120,7 +120,7 @@ export default {
                 }
                 
                 // [v1.18.59] 配对验证时，强制清洗 D1 中的 URL（双保险）
-                const cleanUrl = (data.url || "").replace(/[`'\s]/g, "").trim();
+                const cleanUrl = (data.url || "").replace(/[`'" \t\n\r]/g, "").trim();
                 await env.DB.prepare("UPDATE config SET val = ? WHERE key = 'CF_WORKER_URL'").bind(cleanUrl).run();
                 
                 // 新节点注册：生成节点 ID 并写入 D1
@@ -147,7 +147,7 @@ export default {
                 return new Response(JSON.stringify({ 
                     success: true, 
                     node_id: nodeId,
-                    cf_worker_url: (data.url || "").replace(/[`'\s]/g, "").trim(),  // 二次清理，确保万无一失
+                    cf_worker_url: (data.url || "").replace(/[`'" \t\n\r]/g, "").trim(),  // 二次清理，确保万无一失
                     cluster_token: data.token,
                     message: "✅ 注册成功！你已加入集群，请开始汇报状态"
                 }));
@@ -533,7 +533,7 @@ async function handleTelegramUpdate(update, env) {
         try {
             // [v1.18.58] 每次生成新配对码时，强制创建新的干净 URL 记录，删除旧记录
             const cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
-            const cleanUrl = (cfWorkerUrl || "").replace(/[`'\s]/g, "").trim();
+            const cleanUrl = (cfWorkerUrl || "").replace(/[`'" \t\n\r]/g, "").trim();
             const clusterToken = await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN;
             
             // 强制覆盖 D1 中的 URL 为干净版本
@@ -761,9 +761,9 @@ async function showWizardPreview(env, ip, botToken, chatId, editId = null) {
 
 async function getConfig(env, key) { 
     const val = await env.DB.prepare("SELECT val FROM config WHERE key = ?").bind(key).first("val");
-    // 自动清理 URL 中的反引号、引号和空白字符
+    // 自动清理 URL 中的反引号、引号、双引号和空白字符
     if (typeof val === 'string' && (key.includes('URL') || key.includes('DOMAIN'))) {
-        return val.replace(/[`'\s]/g, "").trim();
+        return val.replace(/[`'" \t\n\r]/g, "").trim();
     }
     return val;
 }
