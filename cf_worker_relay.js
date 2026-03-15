@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.61";
+const VERSION = "v1.18.62";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -125,23 +125,67 @@ export default {
                 
                 // 新节点注册：生成节点 ID 并写入 D1
                 const nodeId = `node_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+                const registerTime = Math.floor(Date.now() / 1000);
                 await env.DB.prepare(`
                     INSERT INTO nodes (id, state, alert_sent, is_selected, t) 
-                    VALUES (?, 'online', 0, 1, ?)
-                `).bind(nodeId, Math.floor(Date.now() / 1000)).run();
+                    VALUES (?, 'pending', 0, 1, ?)
+                `).bind(nodeId, registerTime).run();
                 
-                // [v1.18.48] 配对成功时不通知，等节点第一次汇报时再通知（避免重复）
-                // 通知 Bot（如果配置了）
-                // try {
-                //     const BOT_TOKEN = await getConfig(env, "BOT_TOKEN");
-                //     const CHAT_ID = await getConfig(env, "CHAT_ID");
-                //     if (BOT_TOKEN && CHAT_ID) {
-                //         await sendTelegram(BOT_TOKEN, CHAT_ID, 
-                //             `🎉 <b>新节点加入集群!</b>\n节点 ID: <code>${nodeId}</code>\n已自动上线并开始汇报`);
-                //     }
-                // } catch (e) {
-                //     // Bot 通知失败不影响注册
-                // }
+                // [v1.18.61] 等待节点第一次汇报（最多等待 30 秒）
+                const BOT_TOKEN = await getConfig(env, "BOT_TOKEN");
+                const CHAT_ID = await getConfig(env, "CHAT_ID");
+                
+                if (BOT_TOKEN && CHAT_ID) {
+                    let reported = false;
+                    let nodeData = null;
+                    
+                    // 轮询检查节点汇报（最多 30 秒）
+                    for (let i = 0; i < 6; i++) {
+                        await new Promise(resolve => setTimeout(resolve, 5000)); // 等待 5 秒
+                        
+                        nodeData = await env.DB.prepare("SELECT * FROM nodes WHERE id = ?").bind(nodeId).first();
+                        if (nodeData && nodeData.ip && nodeData.ip !== '0.0.0.0' && nodeData.cpu) {
+                            reported = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!reported || !nodeData) {
+                        // 节点未汇报，删除记录并返回错误
+                        await env.DB.prepare("DELETE FROM nodes WHERE id = ?").bind(nodeId).run();
+                        return new Response(JSON.stringify({ 
+                            success: false, 
+                            error: "节点未在 30 秒内汇报状态，配对失败。请检查网络连接或重新尝试"
+                        }));
+                    }
+                    
+                    // 节点已汇报，发送上线通知（带完整状态）
+                    let h = { xray: "FAIL", nginx: "FAIL", warp: "SKIP", loop: "OK" };
+                    try { h = JSON.parse(nodeData.health || "{}"); } catch (e) { }
+                    
+                    const x = h.xray === "OK" ? "🟢" : "🔴";
+                    const n = h.nginx === "OK" ? "🟢" : "🔴";
+                    const w = (h.warp === "OFF" || h.warp === "SKIP") ? "⚪" : (h.warp === "OK" ? "🟢" : "🔴");
+                    const l = h.loop === "OK" ? "🟢" : "🔴";
+                    
+                    const joinInfo = `🎉 <b>新节点加入集群!</b>\n\n` +
+                        `🆔 节点 ID: <code>${nodeId}</code>\n` +
+                        `🖥️ 主机名：${nodeData.hostname || nodeId}\n` +
+                        `🌐 IP: <code>${nodeData.ip}</code>\n` +
+                        `📊 版本：v${nodeData.v}\n\n` +
+                        `📈 状态指标:\n` +
+                        `├ Xray: ${x}\n` +
+                        `├ Nginx: ${n}\n` +
+                        `├ WARP: ${w}\n` +
+                        `└ Loopback: ${l}\n\n` +
+                        `✅ 节点已通过验证并正式上线`;
+                    
+                    const btns = [[{ text: "📊 查看集群状态", callback_data: "show_status" }]];
+                    await sendTelegram(BOT_TOKEN, CHAT_ID, joinInfo, { inline_keyboard: btns });
+                    
+                    // 更新节点状态为 online（已通知）
+                    await env.DB.prepare("UPDATE nodes SET state = 'online', alert_sent = 0 WHERE id = ?").bind(nodeId).run();
+                }
                 
                 // 返回集群配置给子节点
                 return new Response(JSON.stringify({ 
