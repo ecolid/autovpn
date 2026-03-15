@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.38";
+const VERSION = "v1.18.39";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -141,7 +141,7 @@ export default {
                 return new Response(JSON.stringify({ 
                     success: true, 
                     node_id: nodeId,
-                    cf_worker_url: data.url,
+                    cf_worker_url: (data.url || "").trim(),
                     cluster_token: data.token,
                     message: "✅ 注册成功！你已加入集群，请开始汇报状态"
                 }));
@@ -514,7 +514,17 @@ async function handleTelegramUpdate(update, env) {
             };
             const code = encrypt(data, CLUSTER_TOKEN);
             
-            const joinInfo = `🔗 <b>配对码已生成!</b>\n\n配对码 (5 分钟有效):\n<code>${code}</code>\n\n📋 <b>使用方式:</b>\n\n在新 VPS 执行:\n<code>autovpn</code>\n选择 <b>8 - 2</b>\n粘贴上方配对码即可`;
+            const joinInfo = `🔗 <b>配对码已生成!</b>
+
+配对码 (5 分钟有效):
+${code}
+
+📋 <b>使用方式:</b>
+
+在新 VPS 执行:
+autovpn
+选择 8 - 2
+粘贴上方配对码即可`;
             await sendTelegram(BOT_TOKEN, CHAT_ID, joinInfo);
         } catch (e) {
             await sendTelegram(BOT_TOKEN, CHAT_ID, `❌ 生成失败：${e.message}`);
