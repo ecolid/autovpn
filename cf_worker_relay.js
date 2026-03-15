@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.3";
+const VERSION = "v1.19.4";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -865,8 +865,23 @@ async function handleTelegramUpdate(update, env) {
         const nodeId = cbData.split("_")[2];
         
         let cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
-        // [v1.19.1] 额外清理，确保 URL 绝对干净
-        cfWorkerUrl = (cfWorkerUrl || "").replace(/[`'" \t\n\r]/g, "").trim();
+        // [v1.19.3] 超彻底清理，确保 URL 绝对干净
+        // 先提取域名部分，然后重建干净的 URL
+        cfWorkerUrl = (cfWorkerUrl || "").trim();
+        // 使用正则表达式提取 https:// 后面的域名
+        const domainMatch = cfWorkerUrl.match(/https?:\/\/([a-zA-Z0-9][a-zA-Z0-9\-\.]*[a-zA-Z0-9])/);
+        if (domainMatch && domainMatch[1]) {
+            cfWorkerUrl = "https://" + domainMatch[1];
+        } else {
+            // 兜底方案：移除所有非法字符
+            cfWorkerUrl = cfWorkerUrl.replace(/[`'" \t\n\r\`]/g, "").trim();
+        }
+        
+        // 强制更新 D1 数据库中的 URL 为干净版本，防止下次再出现
+        if (cfWorkerUrl && cfWorkerUrl.startsWith("https://")) {
+            await env.DB.prepare("UPDATE config SET val = ? WHERE key = 'CF_WORKER_URL'").bind(cfWorkerUrl).run();
+        }
+        
         const clusterToken = await getConfig(env, "CLUSTER_TOKEN");
         
         const deployCmd = `curl -sL "${cfWorkerUrl}/deploy" | bash -s -- --deploy-silent --cf-worker-url "${cfWorkerUrl}" --cluster-token "${clusterToken}" --node-id "${nodeId}"`;
