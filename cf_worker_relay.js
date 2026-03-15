@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.1";
+const VERSION = "v1.19.2";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -864,7 +864,9 @@ async function handleTelegramUpdate(update, env) {
     if (cbData?.startsWith("gen_deploy_")) {
         const nodeId = cbData.split("_")[2];
         
-        const cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
+        let cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
+        // [v1.19.1] 额外清理，确保 URL 绝对干净
+        cfWorkerUrl = (cfWorkerUrl || "").replace(/[`'" \t\n\r]/g, "").trim();
         const clusterToken = await getConfig(env, "CLUSTER_TOKEN");
         
         const deployCmd = `curl -sL "${cfWorkerUrl}/deploy" | bash -s -- --deploy-silent --cf-worker-url "${cfWorkerUrl}" --cluster-token "${clusterToken}" --node-id "${nodeId}"`;
