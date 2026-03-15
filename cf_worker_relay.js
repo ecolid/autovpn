@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.39";
+const VERSION = "v1.18.40";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -264,6 +264,17 @@ export default {
         
         // 清理过期配对码
         await env.DB.prepare("DELETE FROM pair_codes WHERE expire_at < ?").bind(Date.now()).run();
+        
+        // 清理长期失联节点（超过 5 分钟未汇报）
+        const staleThreshold = Date.now() - (5 * 60 * 1000);
+        const staleNodes = await env.DB.prepare("SELECT id FROM nodes WHERE state = 'online' AND t < ?")
+            .bind(Math.floor(staleThreshold / 1000)).all();
+        
+        if (staleNodes.results && staleNodes.results.length > 0) {
+            const staleIds = staleNodes.results.map(n => n.id).join(",");
+            await env.DB.prepare(`DELETE FROM nodes WHERE id IN (${staleIds})`).run();
+            console.log(`[Guardian] 清理了 ${staleNodes.results.length} 个失联节点: ${staleIds}`);
+        }
         
         if (!BOT_TOKEN || !CHAT_ID) return;
         const now = Math.floor(Date.now() / 1000);
