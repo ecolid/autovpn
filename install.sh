@@ -1110,9 +1110,12 @@ EOF
     systemctl daemon-reload
     
     # [v1.18.46] 配对模式下注入正确的 NODE_ID
+    log_info "[DEBUG] NODE_ID='$NODE_ID', hostname='$(hostname)'"
     if [[ -n "$NODE_ID" && "$NODE_ID" != "$(hostname)" ]]; then
         sed -i "s/^NODE_ID = .*/NODE_ID = \"$NODE_ID\"/" /usr/local/etc/autovpn/guardian.py
         log_info "✅ 节点 ID 已注入：$NODE_ID"
+    else
+        log_info "⚠️ 跳过 NODE_ID 注入（NODE_ID 为空或与 hostname 相同）"
     fi
     
     if systemctl enable autovpn-guardian && systemctl restart autovpn-guardian; then
