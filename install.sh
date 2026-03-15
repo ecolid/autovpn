@@ -788,6 +788,7 @@ rotate_cluster_keys() {
 # 辅助：配置 Guardian Bot (Python 交互式机器人 & 集群增强)
 setup_guardian_bot() {
     local mode=$1
+    log_info "[DEBUG] setup_guardian_bot 被调用，mode='$mode', NODE_ID='$NODE_ID'"
     log_info "正在配置 AutoVPN Guardian 集群服务..."
     
     # 基础环境检查（静默模式也必须执行）
