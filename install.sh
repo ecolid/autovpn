@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.63"
+VERSION="v1.18.64"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -791,6 +791,21 @@ setup_guardian_bot() {
     log_info "[DEBUG] setup_guardian_bot 被调用，mode='$mode', NODE_ID='$NODE_ID'"
     log_info "正在配置 AutoVPN Guardian 集群服务..."
     
+    # [v1.18.63] 检查 .env 文件是否存在且包含 NODE_ID
+    if [[ ! -f "$ENV_PATH" ]]; then
+        log_err "❌ .env 文件不存在，无法配置 Guardian！"
+        return 1
+    fi
+    
+    local env_node_id=$(grep "^NODE_ID=" "$ENV_PATH" 2>/dev/null | cut -d'=' -f2 | tr -d '"')
+    if [[ -z "$env_node_id" ]]; then
+        log_err "❌ .env 文件中 NODE_ID 为空，无法配置 Guardian！"
+        log_info "当前 NODE_ID 变量：'$NODE_ID'"
+        return 1
+    fi
+    
+    log_info "[DEBUG] .env 中的 NODE_ID: '$env_node_id'"
+    
     # 基础环境检查（静默模式也必须执行）
     if ! command -v python3 &> /dev/null; then
         apt-get update &> /dev/null && apt-get install -y python3 python3-requests &> /dev/null
@@ -1126,6 +1141,27 @@ EOF
     
     if systemctl enable autovpn-guardian && systemctl restart autovpn-guardian; then
         log_info "✅ Guardian 服务已启动并启用"
+        
+        # [v1.18.63] 等待 guardian 第一次汇报（最多 10 秒）
+        log_info "正在等待 guardian 第一次汇报..."
+        sleep 3
+        
+        if [[ -f "$ENV_PATH" ]]; then
+            source "$ENV_PATH"
+            local test_report=$(curl -s -X POST "${CF_WORKER_URL}/report" \
+                -H "Content-Type: application/json" \
+                -H "X-Cluster-Token: ${CLUSTER_TOKEN}" \
+                -d "{\"id\":\"${NODE_ID}\",\"cpu\":\"0\",\"mem_pct\":\"0\",\"v\":\"test\",\"h\":{},\"ip\":\"0.0.0.0\",\"traff\":{},\"qual\":{}}")
+            
+            log_info "[DEBUG] 测试汇报响应：$test_report"
+            
+            if echo "$test_report" | jq -e '.success' > /dev/null 2>&1; then
+                log_info "✅ Guardian 汇报测试成功"
+            else
+                log_warn "⚠️ Guardian 汇报测试失败，但服务已启动"
+                log_info "请检查：journalctl -u autovpn-guardian -n 20"
+            fi
+        fi
     else
         log_err "❌ Guardian 服务启动失败！请检查日志：journalctl -u autovpn-guardian"
         return 1
