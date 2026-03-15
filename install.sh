@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.69"
+VERSION="v1.18.70"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -1703,6 +1703,7 @@ show_menu() {
                                     # 调用 Worker 检查节点状态
                                     local check_res=$(curl -s -X POST "${CF_WORKER_URL}/pair" \
                                         -H "Content-Type: application/json" \
+                                        -H "X-Cluster-Token: ${CLUSTER_TOKEN}" \
                                         -d "{\"action\": \"check\", \"node_id\": \"$NODE_ID\"}")
                                     
                                     local node_status=$(echo "$check_res" | jq -r '.status' 2>/dev/null)
