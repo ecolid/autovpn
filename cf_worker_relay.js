@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.72";
+const VERSION = "v1.18.73";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -601,9 +601,19 @@ async function handleTelegramUpdate(update, env) {
 
     if (cbData === "generate_pair") {
         try {
-            // [v1.18.58] 每次生成新配对码时，强制创建新的干净 URL 记录，删除旧记录
+            // [v1.18.72] 从 D1 读取 URL 并强制清理
             const cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
-            const cleanUrl = (cfWorkerUrl || "").replace(/[`'" \t\n\r]/g, "").trim();
+            // 简单暴力清理：只保留 https:// 和域名合法字符
+            let cleanUrl = (cfWorkerUrl || "");
+            // 提取域名部分（去掉所有非法字符）
+            const domainMatch = cleanUrl.match(/https?:\/\/([a-zA-Z0-9][a-zA-Z0-9\-\.]*[a-zA-Z0-9])/);
+            if (domainMatch && domainMatch[1]) {
+                cleanUrl = "https://" + domainMatch[1];
+            } else {
+                // 如果提取失败，用最简单的方式清理
+                cleanUrl = cleanUrl.replace(/[`'" \t\n\r]/g, "").trim();
+            }
+            
             const clusterToken = await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN;
             
             // 强制覆盖 D1 中的 URL 为干净版本
@@ -611,7 +621,7 @@ async function handleTelegramUpdate(update, env) {
             
             // 生成加密配对码（包含 URL + Token + 过期时间）
             const data = {
-                url: cleanUrl,
+                url: cleanUrl,  // 确保配对码里的 URL 绝对干净
                 token: clusterToken,
                 expire: Date.now() + 300000 // 5 分钟
             };
