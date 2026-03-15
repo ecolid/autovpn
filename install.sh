@@ -476,6 +476,7 @@ TG_CHAT_ID="$TG_CHAT_ID"
 CLUSTER_MODE="$CLUSTER_MODE"
 CLUSTER_TOKEN="$CLUSTER_TOKEN"
 CF_WORKER_URL="$CF_WORKER_URL"
+NODE_ID="$NODE_ID"
 EOF
     # 同步老板钥匙 (v1.18.0)
     sync_owner_dna
@@ -902,7 +903,16 @@ import requests, time, subprocess, os, json, statistics, sys, socket
 
 VERSION = "1.14.4"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
-NODE_ID = socket.gethostname()
+
+# [v1.18.46] 优先从 .env 读取 NODE_ID（配对模式），否则使用 hostname
+NODE_ID = os.environ.get("NODE_ID") or socket.gethostname()
+try:
+    with open(ENV_PATH, "r") as f:
+        for line in f:
+            if line.startswith("NODE_ID="):
+                NODE_ID = line.split("=")[1].strip().replace('"', '')
+                break
+except: pass
 
 # 强制注入 PATH 确保 crontab/systemd 环境正常
 os.environ["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -1094,6 +1104,13 @@ EOF
     ln -sf "$target_script" /usr/local/bin/autovpn
     
     systemctl daemon-reload
+    
+    # [v1.18.46] 配对模式下注入正确的 NODE_ID
+    if [[ -n "$NODE_ID" && "$NODE_ID" != "$(hostname)" ]]; then
+        sed -i "s/^NODE_ID = .*/NODE_ID = \"$NODE_ID\"/" /usr/local/etc/autovpn/guardian.py
+        log_info "✅ 节点 ID 已注入：$NODE_ID"
+    fi
+    
     if systemctl enable autovpn-guardian && systemctl restart autovpn-guardian; then
         log_info "✅ Guardian 服务已启动并启用"
     else
