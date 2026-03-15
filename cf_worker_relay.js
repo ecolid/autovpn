@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.59";
+const VERSION = "v1.18.60";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -118,6 +118,10 @@ export default {
                 if (now > data.expire) {
                     return new Response(JSON.stringify({ success: false, error: "配对码已过期，请重新生成" }));
                 }
+                
+                // [v1.18.59] 配对验证时，强制清洗 D1 中的 URL（双保险）
+                const cleanUrl = (data.url || "").replace(/[`'\s]/g, "").trim();
+                await env.DB.prepare("UPDATE config SET val = ? WHERE key = 'CF_WORKER_URL'").bind(cleanUrl).run();
                 
                 // 新节点注册：生成节点 ID 并写入 D1
                 const nodeId = `node_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
