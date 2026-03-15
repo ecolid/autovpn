@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.52";
+const VERSION = "v1.18.53";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -142,7 +142,7 @@ export default {
                 return new Response(JSON.stringify({ 
                     success: true, 
                     node_id: nodeId,
-                    cf_worker_url: (data.url || "").replace(/[`'\s]/g, "").trim(),
+                    cf_worker_url: (data.url || "").replace(/[`'\s]/g, "").trim(),  // 二次清理，确保万无一失
                     cluster_token: data.token,
                     message: "✅ 注册成功！你已加入集群，请开始汇报状态"
                 }));
@@ -523,7 +523,9 @@ async function handleTelegramUpdate(update, env) {
 
     if (cbData === "generate_pair") {
         try {
-            const cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
+            let cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
+            // [v1.18.52] 二次清理，确保配对码里的 URL 干净
+            cfWorkerUrl = (cfWorkerUrl || "").replace(/[`'\s]/g, "").trim();
             const clusterToken = await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN;
             
             // 生成加密配对码（包含 URL + Token + 过期时间）
