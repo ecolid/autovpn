@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.69";
+const VERSION = "v1.18.71";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -185,7 +185,14 @@ export default {
                 
                 if (BOT_TOKEN && CHAT_ID) {
                     let h = { xray: "FAIL", nginx: "FAIL", warp: "SKIP", loop: "OK" };
-                    try { h = JSON.parse(data.h || "{}"); } catch (e) { }
+                    try { 
+                        // data.h 可能是对象或字符串，兼容处理
+                        if (typeof data.h === 'string') {
+                            h = JSON.parse(data.h);
+                        } else if (typeof data.h === 'object') {
+                            h = data.h;
+                        }
+                    } catch (e) { }
                     
                     const x = h.xray === "OK" ? "🟢" : "🔴";
                     const n = h.nginx === "OK" ? "🟢" : "🔴";
@@ -236,7 +243,7 @@ export default {
                 INSERT INTO nodes (id, hostname, cpu, mem_pct, v, t, state, health, traffic_total, quality, ip, alert_sent, is_selected) 
                 VALUES (?, ?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, 0, ?)
                 ON CONFLICT(id) DO UPDATE SET 
-                hostname=COALESCE(EXCLUDED.hostname, nodes.hostname),
+                hostname=EXCLUDED.hostname,
                 cpu=EXCLUDED.cpu, mem_pct=EXCLUDED.mem_pct, v=EXCLUDED.v, t=EXCLUDED.t, state='online', health=EXCLUDED.health, 
                 traffic_total=EXCLUDED.traffic_total, quality=EXCLUDED.quality, 
                 ip=CASE WHEN EXCLUDED.ip IS NOT NULL AND EXCLUDED.ip != '' THEN EXCLUDED.ip ELSE nodes.ip END,
@@ -374,9 +381,28 @@ async function handleTelegramUpdate(update, env) {
             if (s.is_selected) selectedCount++;
 
             let h = { xray: "FAIL", nginx: "FAIL", warp: "SKIP", loop: "OK" }, q = { china: { lat: 0, loss: 0 }, global: { lat: 0, loss: 0 } }, t = { up: 0, down: 0 };
-            try { h = JSON.parse(s.health || "{}"); } catch (e) { }
-            try { q = JSON.parse(s.quality || "{}"); } catch (e) { }
-            try { t = JSON.parse(s.traffic_total || "{}"); } catch (e) { }
+            try { 
+                // s.health 可能是对象或字符串，兼容处理
+                if (typeof s.health === 'string') {
+                    h = JSON.parse(s.health);
+                } else if (typeof s.health === 'object') {
+                    h = s.health;
+                }
+            } catch (e) { }
+            try { 
+                if (typeof s.quality === 'string') {
+                    q = JSON.parse(s.quality);
+                } else if (typeof s.quality === 'object') {
+                    q = s.quality;
+                }
+            } catch (e) { }
+            try { 
+                if (typeof s.traffic_total === 'string') {
+                    t = JSON.parse(s.traffic_total);
+                } else if (typeof s.traffic_total === 'object') {
+                    t = s.traffic_total;
+                }
+            } catch (e) { }
 
             const upGB = (t.up / (1024 ** 3)).toFixed(2);
             const downGB = (t.down / (1024 ** 3)).toFixed(2);
