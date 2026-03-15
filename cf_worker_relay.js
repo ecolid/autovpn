@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.66";
+const VERSION = "v1.18.67";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -131,7 +131,7 @@ export default {
                     VALUES (?, 'pending', 0, 1, ?)
                 `).bind(nodeId, registerTime).run();
                 
-                // [v1.18.65] 等待 guardian 第一次汇报（最多 60 秒）
+                // [v1.18.66] 等待 guardian 第一次汇报（最多 30 秒）
                 const BOT_TOKEN = await getConfig(env, "BOT_TOKEN");
                 const CHAT_ID = await getConfig(env, "CHAT_ID");
                 
@@ -139,8 +139,8 @@ export default {
                 let nodeData = null;
                 let lastCheckInfo = "";
                 
-                // 轮询检查节点汇报（最多 60 秒，12 次 * 5 秒）
-                for (let i = 0; i < 12; i++) {
+                // 轮询检查节点汇报（最多 30 秒，6 次 * 5 秒）
+                for (let i = 0; i < 6; i++) {
                     await new Promise(resolve => setTimeout(resolve, 5000)); // 等待 5 秒
                     
                     nodeData = await env.DB.prepare("SELECT * FROM nodes WHERE id = ?").bind(nodeId).first();
@@ -164,7 +164,7 @@ export default {
                     await env.DB.prepare("DELETE FROM nodes WHERE id = ?").bind(nodeId).run();
                     
                     // 构建详细错误信息
-                    let errorMsg = "节点未在 60 秒内汇报有效状态，配对失败。\n\n";
+                    let errorMsg = "节点未在 30 秒内汇报有效状态，配对失败。\n\n";
                     errorMsg += "🔍 诊断信息:\n";
                     errorMsg += `├ 节点 ID: ${nodeId}\n`;
                     errorMsg += `├ 注册时间：${new Date(registerTime * 1000).toLocaleString('zh-CN')}\n`;
