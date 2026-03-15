@@ -1626,6 +1626,15 @@ show_menu() {
                             log_info "  节点 ID: $NODE_ID"
                             log_info "  Worker: $CF_WORKER_URL"
                             
+                            # [v1.18.47] 配对成功后，立即从 GitHub 拉取最新 install.sh
+                            log_info "正在同步最新脚本..."
+                            wget -qO /tmp/install_new.sh https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh
+                            if [ -f /tmp/install_new.sh ]; then
+                                cp -f /tmp/install_new.sh /usr/local/etc/autovpn/install.sh
+                                ln -sf /usr/local/etc/autovpn/install.sh /usr/local/bin/autovpn
+                                log_info "✅ 脚本已更新至最新版本"
+                            fi
+                            
                             CLUSTER_MODE="on"
                             save_env
                             
