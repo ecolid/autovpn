@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.18.65";
+const VERSION = "v1.18.66";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -131,14 +131,98 @@ export default {
                     VALUES (?, 'pending', 0, 1, ?)
                 `).bind(nodeId, registerTime).run();
                 
-                // [v1.18.64] 立即返回成功，让 install.sh 继续启动 guardian
-                // 节点汇报由 guardian.py 主动发起，不在 /verify 接口等待
+                // [v1.18.65] 等待 guardian 第一次汇报（最多 60 秒）
+                const BOT_TOKEN = await getConfig(env, "BOT_TOKEN");
+                const CHAT_ID = await getConfig(env, "CHAT_ID");
+                
+                let reported = false;
+                let nodeData = null;
+                let lastCheckInfo = "";
+                
+                // 轮询检查节点汇报（最多 60 秒，12 次 * 5 秒）
+                for (let i = 0; i < 12; i++) {
+                    await new Promise(resolve => setTimeout(resolve, 5000)); // 等待 5 秒
+                    
+                    nodeData = await env.DB.prepare("SELECT * FROM nodes WHERE id = ?").bind(nodeId).first();
+                    
+                    // 记录检查信息
+                    if (nodeData) {
+                        lastCheckInfo = `第${i+1}次检查：IP=${nodeData.ip || 'null'}, CPU=${nodeData.cpu || 'null'}, Hostname=${nodeData.hostname || 'null'}, 状态=${nodeData.state}`;
+                        
+                        // 验证关键字段：IP、CPU、hostname 必须有值
+                        if (nodeData.ip && nodeData.ip !== '0.0.0.0' && nodeData.cpu && nodeData.hostname) {
+                            reported = true;
+                            break;
+                        }
+                    } else {
+                        lastCheckInfo = `第${i+1}次检查：节点记录不存在`;
+                    }
+                }
+                
+                if (!reported || !nodeData) {
+                    // 节点未汇报，删除记录并返回错误
+                    await env.DB.prepare("DELETE FROM nodes WHERE id = ?").bind(nodeId).run();
+                    
+                    // 构建详细错误信息
+                    let errorMsg = "节点未在 60 秒内汇报有效状态，配对失败。\n\n";
+                    errorMsg += "🔍 诊断信息:\n";
+                    errorMsg += `├ 节点 ID: ${nodeId}\n`;
+                    errorMsg += `├ 注册时间：${new Date(registerTime * 1000).toLocaleString('zh-CN')}\n`;
+                    errorMsg += `├ 最后检查：${lastCheckInfo}\n`;
+                    errorMsg += `└ 可能原因:\n`;
+                    errorMsg += `   1. VPS 无法访问 Worker URL（网络问题）\n`;
+                    errorMsg += `   2. guardian.py 未启动或配置错误\n`;
+                    errorMsg += `   3. CLUSTER_TOKEN 不匹配\n`;
+                    errorMsg += `   4. VPS 系统时间不正确\n\n`;
+                    errorMsg += "💡 建议操作:\n";
+                    errorMsg += "1. 检查 VPS 网络连接：curl -I https://autovpn-relay.ealth6.workers.dev\n";
+                    errorMsg += "2. 检查 guardian 状态：systemctl status autovpn-guardian\n";
+                    errorMsg += "3. 查看 guardian 日志：journalctl -u autovpn-guardian -n 30\n";
+                    errorMsg += "4. 确认系统时间：date\n";
+                    errorMsg += "5. 重新生成配对码并重试";
+                    
+                    return new Response(JSON.stringify({ 
+                        success: false, 
+                        error: errorMsg
+                    }));
+                }
+                
+                // 节点已汇报，发送上线通知（带完整状态）
+                if (BOT_TOKEN && CHAT_ID) {
+                    let h = { xray: "FAIL", nginx: "FAIL", warp: "SKIP", loop: "OK" };
+                    try { h = JSON.parse(nodeData.health || "{}"); } catch (e) { }
+                    
+                    const x = h.xray === "OK" ? "🟢" : "🔴";
+                    const n = h.nginx === "OK" ? "🟢" : "🔴";
+                    const w = (h.warp === "OFF" || h.warp === "SKIP") ? "⚪" : (h.warp === "OK" ? "🟢" : "🔴");
+                    const l = h.loop === "OK" ? "🟢" : "🔴";
+                    
+                    const joinInfo = `🎉 <b>新节点加入集群!</b>\n\n` +
+                        `🆔 节点 ID: <code>${nodeId}</code>\n` +
+                        `🖥️ 主机名：${nodeData.hostname || nodeId}\n` +
+                        `🌐 IP: <code>${nodeData.ip}</code>\n` +
+                        `📊 版本：v${nodeData.v}\n\n` +
+                        `📈 状态指标:\n` +
+                        `├ Xray: ${x}\n` +
+                        `├ Nginx: ${n}\n` +
+                        `├ WARP: ${w}\n` +
+                        `└ Loopback: ${l}\n\n` +
+                        `✅ 节点已通过验证并正式上线`;
+                    
+                    const btns = [[{ text: "📊 查看集群状态", callback_data: "show_status" }]];
+                    await sendTelegram(BOT_TOKEN, CHAT_ID, joinInfo, { inline_keyboard: btns });
+                }
+                
+                // 更新节点状态为 online（已通知）
+                await env.DB.prepare("UPDATE nodes SET state = 'online', alert_sent = 0 WHERE id = ?").bind(nodeId).run();
+                
+                // 返回集群配置给子节点
                 return new Response(JSON.stringify({ 
                     success: true, 
                     node_id: nodeId,
                     cf_worker_url: (data.url || "").replace(/[`'" \t\n\r]/g, "").trim(),
                     cluster_token: data.token,
-                    message: "✅ 注册成功！请启动 guardian 开始汇报状态"
+                    message: "✅ 注册成功！你已加入集群"
                 }));
             }
             
