@@ -1636,11 +1636,13 @@ show_menu() {
                             
                             # [v1.18.47] 配对成功后，立即从 GitHub 拉取最新 install.sh
                             log_info "正在同步最新脚本..."
-                            wget -qO /tmp/install_new.sh https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh
-                            if [ -f /tmp/install_new.sh ]; then
+                            if curl -sL -o /tmp/install_new.sh https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh && [ -f /tmp/install_new.sh ] && [ -s /tmp/install_new.sh ]; then
                                 cp -f /tmp/install_new.sh /usr/local/etc/autovpn/install.sh
                                 ln -sf /usr/local/etc/autovpn/install.sh /usr/local/bin/autovpn
+                                chmod +x /usr/local/etc/autovpn/install.sh
                                 log_info "✅ 脚本已更新至最新版本"
+                            else
+                                log_warn "⚠️ 脚本同步失败，使用当前版本继续配置"
                             fi
                             
                             CLUSTER_MODE="on"
