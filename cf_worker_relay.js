@@ -528,12 +528,12 @@ async function handleTelegramUpdate(update, env) {
             const joinInfo = `🔗 <b>配对码已生成!</b>
 
 配对码 (5 分钟有效):
-${code}
+<code>${code}</code>
 
 📋 <b>使用方式:</b>
 
 在新 VPS 执行:
-autovpn
+<code>autovpn</code>
 选择 8 - 2
 粘贴上方配对码即可`;
             await sendTelegram(BOT_TOKEN, CHAT_ID, joinInfo);
