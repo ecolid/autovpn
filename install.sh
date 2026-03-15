@@ -1094,14 +1094,18 @@ EOF
 
     # [v1.18.0] 脚本持久化部署：确保全局指令永远指向正确的脚本
     local target_script="/usr/local/etc/autovpn/install.sh"
-    # [v1.18.0] 修复 piped execution (curl | bash) 导致 $0 指向 bash 的问题
-    if [[ -f "$0" && ! "$0" == *"bash"* ]]; then
-        cp "$(readlink -f "$0")" "$target_script"
-    else
-        wget -qO "$target_script" https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh
+    
+    # [v1.18.51] 配对模式下，install.sh 已在主流程更新，此处不再重复拉取
+    if [[ "$MODE" != "silent" ]]; then
+        # [v1.18.0] 修复 piped execution (curl | bash) 导致 $0 指向 bash 的问题
+        if [[ -f "$0" && ! "$0" == *"bash"* ]]; then
+            cp "$(readlink -f "$0")" "$target_script"
+        else
+            wget -qO "$target_script" https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh
+        fi
+        chmod +x "$target_script"
+        ln -sf "$target_script" /usr/local/bin/autovpn
     fi
-    chmod +x "$target_script"
-    ln -sf "$target_script" /usr/local/bin/autovpn
     
     systemctl daemon-reload
     
