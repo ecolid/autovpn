@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.18.37"
+VERSION="v1.18.38"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -1592,7 +1592,7 @@ show_menu() {
                         local pair_success=$(echo "$pair_res" | jq -r '.success' 2>/dev/null)
                         if [[ "$pair_success" == "true" ]]; then
                             NODE_ID=$(echo "$pair_res" | jq -r '.node_id')
-                            CF_WORKER_URL=$(echo "$pair_res" | jq -r '.cf_worker_url')
+                            CF_WORKER_URL=$(echo "$pair_res" | jq -r '.cf_worker_url' | xargs)  # 去除空格
                             CLUSTER_TOKEN=$(echo "$pair_res" | jq -r '.cluster_token')
                             local reg_message=$(echo "$pair_res" | jq -r '.message')
                             
@@ -1697,7 +1697,7 @@ main() {
             exit 1
         fi
         
-        CF_WORKER_URL=$(echo "$pair_res" | jq -r '.cf_worker_url')
+        CF_WORKER_URL=$(echo "$pair_res" | jq -r '.cf_worker_url' | xargs)
         CLUSTER_TOKEN=$(echo "$pair_res" | jq -r '.cluster_token')
         
         log_info "✅ 配对成功！正在配置集群..."
