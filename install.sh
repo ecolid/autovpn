@@ -30,7 +30,6 @@ while [[ $# -gt 0 ]]; do
         start|stop|restart|log|speed) CMD_ACTION="$1"; shift ;;
         --cf-worker-url) CF_WORKER_URL="$2"; shift 2 ;;
         --cluster-token) CLUSTER_TOKEN="$2"; shift 2 ;;
-        --pair) PAIR_CODE="$2"; shift 2 ;;
         --deploy-silent) DEPLOY_SILENT=1; MODE="silent"; shift ;;
         --node-id) NODE_ID="$2"; shift 2 ;;
         *) shift ;;
@@ -1659,133 +1658,12 @@ show_menu() {
         8) 
             echo -e "\n${BLUE}--- Guardian 集群中心 ---${NC}"
             echo -e "1. 配置集群 (首次部署)"
-            echo -e "2. 配对加入集群 (使用配对码)"
-            echo -e "3. 刷新本地守护进程"
+            echo -e "2. 刷新本地守护进程"
             echo -e "0. 返回主菜单"
             read -p "请选择: " guardian_choice
             case $guardian_choice in
                 1) setup_guardian_bot ;;
-                2) 
-                    read -p "请输入配对码： " pair_code
-                    if [[ -z "$pair_code" ]]; then
-                        log_err "配对码不能为空"
-                    else
-                        log_info "正在验证配对码..."
-                        # 尝试从主节点 Worker URL 验证
-                        if [ -f "$ENV_PATH" ]; then source "$ENV_PATH"; fi
-                        
-                        # 如果没有 CF_WORKER_URL，尝试从配对码中提取（加密模式）
-                        if [[ -z "$CF_WORKER_URL" ]]; then
-                            # 尝试用默认 Token 解密（加密配对码自带 URL）
-                            CF_WORKER_URL="https://autovpn-relay.ealth6.workers.dev"
-                        fi
-                        
-                        local pair_res=$(curl -s -X POST "${CF_WORKER_URL}/pair" \
-                            -H "Content-Type: application/json" \
-                            -d "{\"action\": \"verify\", \"code\": \"$pair_code\"}")
-                        
-                        # 调试输出
-                        log_info "Worker 响应：$pair_res"
-                        
-                        local pair_success=$(echo "$pair_res" | jq -r '.success' 2>/dev/null)
-                        if [[ "$pair_success" == "true" ]]; then
-                            NODE_ID=$(echo "$pair_res" | jq -r '.node_id')
-                            CF_WORKER_URL=$(echo "$pair_res" | jq -r '.cf_worker_url' | xargs)  # 去除空格
-                            CLUSTER_TOKEN=$(echo "$pair_res" | jq -r '.cluster_token')
-                            local reg_message=$(echo "$pair_res" | jq -r '.message')
-                            
-                            log_info "✅ 配对成功！$reg_message"
-                            log_info "📋 节点信息："
-                            log_info "  节点 ID: $NODE_ID"
-                            log_info "  Worker: $CF_WORKER_URL"
-                            
-                            # [v1.18.47] 配对成功后，立即从 GitHub 拉取最新 install.sh
-                            log_info "正在同步最新脚本..."
-                            if curl -sL -o /tmp/install_new.sh https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh && [ -f /tmp/install_new.sh ] && [ -s /tmp/install_new.sh ]; then
-                                cp -f /tmp/install_new.sh /usr/local/etc/autovpn/install.sh
-                                ln -sf /usr/local/etc/autovpn/install.sh /usr/local/bin/autovpn
-                                chmod +x /usr/local/etc/autovpn/install.sh
-                                log_info "✅ 脚本已更新至最新版本"
-                            else
-                                log_warn "⚠️ 脚本同步失败，使用当前版本继续配置"
-                            fi
-                            
-                            CLUSTER_MODE="on"
-                            save_env
-                            
-                            # 配置 Guardian 服务（从 Worker 获取 SSH 公钥，静默模式）
-                            if setup_guardian_bot "silent"; then
-                                log_info "✅ 集群配置完成！节点已开始汇报状态"
-                                
-                                # [v1.18.68] 等待 guardian 第一次汇报并验证（最多 30 秒）
-                                log_info "正在等待 guardian 第一次汇报并验证..."
-                                local verify_success=false
-                                
-                                # [v1.19.6] 修复：从 .env 读取 NODE_ID，确保变量作用域正确
-                                local verify_node_id="$NODE_ID"
-                                if [[ -z "$verify_node_id" ]] && [[ -f "$ENV_PATH" ]]; then
-                                    verify_node_id=$(grep "^NODE_ID=" "$ENV_PATH" 2>/dev/null | cut -d'=' -f2 | tr -d '"')
-                                fi
-                                
-                                for i in {1..6}; do
-                                    sleep 5
-                                    
-                                    # 调用 Worker 检查节点状态
-                                    local check_res=$(curl -s -X POST "${CF_WORKER_URL}/pair" \
-                                        -H "Content-Type: application/json" \
-                                        -H "X-Cluster-Token: ${CLUSTER_TOKEN}" \
-                                        -d "{\"action\": \"check\", \"node_id\": \"$verify_node_id\"}")
-                                    
-                                    local node_status=$(echo "$check_res" | jq -r '.status' 2>/dev/null)
-                                    local node_ip=$(echo "$check_res" | jq -r '.ip' 2>/dev/null)
-                                    local node_cpu=$(echo "$check_res" | jq -r '.cpu' 2>/dev/null)
-                                    local node_hostname=$(echo "$check_res" | jq -r '.hostname' 2>/dev/null)
-                                    
-                                    log_info "[第${i}次检查] IP=${node_ip:-null}, CPU=${node_cpu:-null}, Hostname=${node_hostname:-null}"
-                                    
-                                    # 验证关键字段
-                                    if [[ "$node_ip" != "null" && "$node_ip" != "0.0.0.0" && -n "$node_cpu" && "$node_hostname" != "null" ]]; then
-                                        verify_success=true
-                                        log_info "✅ 节点验证成功！"
-                                        break
-                                    fi
-                                done
-                                
-                                if [[ "$verify_success" == "true" ]]; then
-                                    log_info "✅ 配对圆满完成！节点已正式上线"
-                                    log_info "💡 提示：在 Telegram Bot 发送 /status 查看节点状态"
-                                else
-                                    log_err "❌ 节点未能成功汇报，配对失败"
-                                    log_info "请检查：journalctl -u autovpn-guardian -n 30"
-                                    
-                                    # [v1.18.72] 验证失败时，清理节点记录并停止 guardian
-                                    log_info "正在清理失败的节点记录..."
-                                    
-                                    # 调用 Worker 删除节点
-                                    curl -s -X POST "${CF_WORKER_URL}/pair" \
-                                        -H "Content-Type: application/json" \
-                                        -H "X-Cluster-Token: ${CLUSTER_TOKEN}" \
-                                        -d "{\"action\": \"delete\", \"node_id\": \"$NODE_ID\"}" > /dev/null
-                                    
-                                    # 停止并禁用 guardian 服务
-                                    systemctl stop autovpn-guardian
-                                    systemctl disable autovpn-guardian
-                                    
-                                    log_info "✅ 已停止 guardian 服务并清理节点记录"
-                                    log_info "💡 请排查问题后重新尝试配对"
-                                fi
-                            else
-                                log_err "❌ Guardian 服务配置失败！节点无法加入集群"
-                            fi
-                            read -p "按回车键返回菜单..."
-                        else
-                            local pair_error=$(echo "$pair_res" | jq -r '.error' 2>/dev/null)
-                            log_err "配对失败：$pair_error"
-                            read -p "按回车键返回菜单..."
-                        fi
-                    fi
-                    ;;
-                3) systemctl restart autovpn-guardian && log_info "✅ 守护进程已重启" || log_err "重启失败" ;;
+                2) systemctl restart autovpn-guardian && log_info "✅ 守护进程已重启" || log_err "重启失败" ;;
                 0) ;;
                 *) log_err "无效输入"; sleep 1 ;;
             esac
@@ -1841,63 +1719,21 @@ main() {
         exit 0
     fi
 
-    if [[ ! -z "$PAIR_CODE" ]]; then
-        log_info ">>> 检测到配对码，正在加入集群..."
-        
-        # 需要获取 Worker URL 才能验证配对码
-        if [[ -z "$CF_WORKER_URL" ]]; then
-            log_err "错误: 使用配对码模式需要提供 --cf-worker-url 参数"
-            log_info "请从 Telegram 机器人获取完整的加入命令"
-            exit 1
-        fi
-        
-        log_info "正在验证配对码..."
-        local pair_res=$(curl -s -X POST "${CF_WORKER_URL}/pair" \
-            -H "Content-Type: application/json" \
-            -d "{\"action\": \"verify\", \"code\": \"$PAIR_CODE\"}")
-        
-        local pair_success=$(echo "$pair_res" | jq -r '.success')
-        if [[ "$pair_success" != "true" ]]; then
-            local pair_error=$(echo "$pair_res" | jq -r '.error')
-            log_err "配对失败: $pair_error"
-            exit 1
-        fi
-        
-        CF_WORKER_URL=$(echo "$pair_res" | jq -r '.cf_worker_url' | xargs)
-        CLUSTER_TOKEN=$(echo "$pair_res" | jq -r '.cluster_token')
-        
-        # [v1.19.8] 使用 VPS 的 hostname 作为节点 ID
-        NODE_ID=$(hostname)
-        log_info "📋 节点 ID: $NODE_ID (VPS hostname)"
-        
-        log_info "✅ 配对成功！正在配置集群..."
-        MODE="silent"
-        CLUSTER_MODE="on"
-        save_env
-        optimize_system
-        setup_guardian_bot
-        log_info "✅ 节点已成功加入集群！"
-        exit 0
-    fi
+
     
     # [v1.18.73] 一键部署模式：从 Worker 获取脚本并自动配置
     if [[ "$DEPLOY_SILENT" == "1" ]]; then
         log_info ">>> 检测到一键部署模式，正在自动配置集群..."
         
-        if [[ -z "$CF_WORKER_URL" || -z "$CLUSTER_TOKEN" || -z "$NODE_ID" ]]; then
-            log_err "错误：一键部署模式需要提供 --cf-worker-url, --cluster-token 和 --node-id 参数"
+        if [[ -z "$CF_WORKER_URL" || -z "$CLUSTER_TOKEN" ]]; then
+            log_err "错误：一键部署模式需要提供 --cf-worker-url 和 --cluster-token 参数"
             exit 1
         fi
         
-        log_info "正在验证集群信息..."
-        local verify_res=$(curl -s -X POST "${CF_WORKER_URL}/pair" \
-            -H "Content-Type: application/json" \
-            -d "{\"action\": \"check\", \"node_id\": \"$NODE_ID\"}")
-        
-        if echo "$verify_res" | jq -e '.status' > /dev/null 2>&1; then
-            log_info "✅ 节点信息验证成功"
-        else
-            log_warn "⚠️ 节点尚未在集群中注册，将自动创建"
+        # 如果没有指定 node-id，就用 hostname
+        if [[ -z "$NODE_ID" ]]; then
+            NODE_ID=$(hostname)
+            log_info "未指定节点 ID，使用主机名：$NODE_ID"
         fi
         
         CLUSTER_MODE="on"
@@ -1905,22 +1741,9 @@ main() {
         optimize_system
         setup_guardian_bot
         
-        # 等待 guardian 第一次汇报
-        log_info "正在等待节点上线..."
-        sleep 10
-        
-        local final_check=$(curl -s -X POST "${CF_WORKER_URL}/pair" \
-            -H "Content-Type: application/json" \
-            -d "{\"action\": \"check\", \"node_id\": \"$NODE_ID\"}")
-        
-        local node_ip=$(echo "$final_check" | jq -r '.ip' 2>/dev/null)
-        if [[ "$node_ip" != "null" && "$node_ip" != "0.0.0.0" ]]; then
-            log_info "✅ 节点已成功加入集群并上线！"
-            log_info "IP: $node_ip"
-        else
-            log_warn "⚠️ 节点配置完成但尚未汇报状态"
-            log_info "请检查：journalctl -u autovpn-guardian -n 30"
-        fi
+        log_info "✅ 节点已成功配置！"
+        log_info "节点 ID: $NODE_ID"
+        log_info "请稍等几分钟，节点会自动上线并汇报状态"
         
         exit 0
     fi
