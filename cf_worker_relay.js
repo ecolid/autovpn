@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.22";
+const VERSION = "v1.19.23";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -508,8 +508,8 @@ async function handleTelegramUpdate(update, env) {
     const cbData = update.callback_query ? update.callback_query.data : null;
 
     if (text === "/start" || text === "/menu" || cbData === "show_main") {
-        // [v1.19.18] 获取节点统计
-        const nodes = await env.DB.prepare("SELECT id, hostname, state, ip, cpu, mem_pct, health, traffic_total, v FROM nodes WHERE id != 'INSTALL_VERIFY' ORDER BY t DESC").all();
+        // [v1.19.22] 获取节点统计（增强版）
+        const nodes = await env.DB.prepare("SELECT * FROM nodes WHERE id != 'INSTALL_VERIFY' ORDER BY t DESC").all();
         
         let onlineCount = 0, offlineCount = 0;
         let nodeCards = "";
@@ -520,33 +520,50 @@ async function handleTelegramUpdate(update, env) {
                 else offlineCount++;
                 
                 // 解析健康状态
-                let statusIcon = "⚫";
-                let statusText = "未知";
+                let h = { xray: "FAIL", nginx: "FAIL", warp: "SKIP", loop: "OK" };
+                let t = { up: 0, down: 0 };
                 try {
-                    const h = JSON.parse(node.health || "{}");
-                    const issues = [];
-                    if (h.xray === 'FAIL') issues.push("X🔴");
-                    if (h.nginx === 'FAIL') issues.push("N🔴");
-                    if (h.warp === 'FAIL' || h.warp === 'SKIP') issues.push("W⚪");
-                    if (h.loop === 'FAIL') issues.push("L🔴");
-                    
-                    if (issues.length === 0) {
-                        statusIcon = "🟢";
-                        statusText = "全好";
-                    } else if (issues.length <= 2) {
-                        statusIcon = "🟡";
-                        statusText = issues.join(" ");
-                    } else {
-                        statusIcon = "🔴";
-                        statusText = "故障";
+                    if (typeof node.health === 'string') {
+                        h = JSON.parse(node.health);
+                    } else if (typeof node.health === 'object') {
+                        h = node.health;
+                    }
+                } catch (e) {}
+                try {
+                    if (typeof node.traffic_total === 'string') {
+                        t = JSON.parse(node.traffic_total);
+                    } else if (typeof node.traffic_total === 'object') {
+                        t = node.traffic_total;
                     }
                 } catch (e) {}
                 
-                // 生成节点卡片
+                const issues = [];
+                if (h.xray === 'FAIL') issues.push("X🔴");
+                if (h.nginx === 'FAIL') issues.push("N��");
+                if (h.warp === 'FAIL' || h.warp === 'SKIP') issues.push("W⚪");
+                if (h.loop === 'FAIL') issues.push("L🔴");
+                
+                let statusIcon, statusText;
+                if (issues.length === 0) {
+                    statusIcon = "🟢";
+                    statusText = "全好";
+                } else if (issues.length <= 2) {
+                    statusIcon = "🟡";
+                    statusText = issues.join(" ");
+                } else {
+                    statusIcon = "🔴";
+                    statusText = "故障";
+                }
+                
+                // 生成节点卡片（增强版）
                 const loadPct = node.cpu ? parseFloat(node.cpu) : 0;
-                nodeCards += `${statusIcon} <b>${node.hostname || node.id}</b>\n`;
-                nodeCards += `   ${statusText} | IP:${node.ip || "0.0.0.0"} | ${node.v || "未知"}\n`;
-                nodeCards += `   └ 负荷：${loadPct.toFixed(1)}%\n\n`;
+                const upGB = ((t.up || 0) / (1024 ** 3)).toFixed(2);
+                const downGB = ((t.down || 0) / (1024 ** 3)).toFixed(2);
+                
+                nodeCards += `🌩️ <b>${node.hostname || node.id}</b> [${node.state === 'online' ? '🟢' : '🔴'}]\n`;
+                nodeCards += `├ ${statusText} | IP:${node.ip || "0.0.0.0"} | v${node.v}\n`;
+                nodeCards += `├ 流量：🔼 ${upGB}GB | �� ${downGB}GB\n`;
+                nodeCards += `└ 负荷：${loadPct.toFixed(1)}%\n\n`;
             }
         }
         
@@ -557,7 +574,7 @@ async function handleTelegramUpdate(update, env) {
 ━━━━━━━━━━━━━━━━━━━━━━
 📈 集群统计
 ━━━━━━━━━━━━━━━━━━━━━━
-�� 在线：${onlineCount}  |  🔴 离线：${offlineCount}  |  📊 总计：${totalCount}
+🟢 在线：${onlineCount} | 🔴 离线：${offlineCount} | 📊 总计：${totalCount}
 ━━━━━━━━━━━━━━━━━━━━━━
 
 🖥️ 节点状态
@@ -573,6 +590,10 @@ ${nodeCards || "暂无节点"}━━━━━━━━━━━━━━━━�
         ];
         await sendTelegram(BOT_TOKEN, CHAT_ID, welcome, { inline_keyboard: btns }, update.callback_query?.message.message_id);
         return new Response("OK");
+    }
+
+    }
+
     }
 
     // ============================================================================
