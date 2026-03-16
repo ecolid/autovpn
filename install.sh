@@ -21,8 +21,7 @@ while [[ $# -gt 0 ]]; do
         --port) XRAY_PORT="$2"; shift 2 ;;
         --domain) DOMAIN="$2"; shift 2 ;;
         --cf-token) CF_TOKEN="$2"; shift 2 ;;
-        --mode) INSTALL_MODE="$2"; shift 2 ;; 
-        --rotate-keys) ROTATE_KEYS=1; shift ;;
+        --mode) INSTALL_MODE="$2"; shift 2 ;;
         --update-bot)
             ENV_PATH="/usr/local/etc/autovpn/.env"
             if [ -f "$ENV_PATH" ]; then source "$ENV_PATH"; fi
@@ -411,30 +410,8 @@ send_tg_msg() {
     fi
 }
 
-# 辅助：同步老板公钥 DNA (v1.18.0)
-sync_owner_dna() {
-    local d1_id=$(cat /usr/local/etc/autovpn/.d1_id 2>/dev/null)
-    [ -z "$d1_id" ] && return 0
-    [ -z "$CF_ACCOUNT_ID" ] || [ -z "$CF_API_TOKEN" ] && return 0
 
-    log_info "正在校验老板 DNA 同步状态..."
-    local key_res=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
-        -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
-        -d "{\"sql\": \"SELECT val FROM config WHERE key = 'SSH_OWNER_PUB'\"}")
-    local owner_pub=$(echo "$key_res" | jq -r '.result[0].results[0].val')
 
-    local detected_owner=$(grep -v "guardian.py" /root/.ssh/authorized_keys 2>/dev/null | grep "ssh-rsa" | head -n 1)
-    if [[ ! -z "$detected_owner" ]]; then
-        if [[ "$owner_pub" == "null" || -z "$owner_pub" || "$detected_owner" != "$owner_pub" ]]; then
-            log_info "发现新老板公钥 DNA，正在同步云端..."
-            local sql_owner="INSERT OR REPLACE INTO config (key, val) VALUES ('SSH_OWNER_PUB', '$detected_owner')"
-            local p_owner=$(jq -n --arg sql "$sql_owner" '{"sql": $sql}')
-            curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
-                -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
-                -d "$p_owner" > /dev/null
-        fi
-    fi
-}
 
 # 辅助：配置 TG 机器人
 config_tg_bot() {
@@ -488,8 +465,6 @@ CLUSTER_TOKEN="$CLUSTER_TOKEN"
 CF_WORKER_URL="$CF_WORKER_URL"
 NODE_ID="$NODE_ID"
 EOF
-    # 同步老板钥匙 (v1.18.0)
-    sync_owner_dna
 }
 
 # 辅助：一键部署 Cloudflare Worker
@@ -714,79 +689,7 @@ verify_cluster_health() {
     [[ "$is_healthy" == "true" ]] && return 0 || return 1
 }
 
-# 辅助：集群密钥轮换 (v1.18.0 - Zero-Downtime Rotation)
-rotate_cluster_keys() {
-    local d1_id=$(cat /usr/local/etc/autovpn/.d1_id 2>/dev/null)
-    if [[ -z "$d1_id" ]]; then log_err "未检测到集群信息，无法轮换"; return 1; fi
 
-    log_info "--- 正在进行密钥轮换 (v1.18.0) ---"
-    
-    # 步骤 1: 生成新密钥
-    log_info "1. 正在生成全新机器人密钥对..."
-    ssh-keygen -t rsa -b 2048 -f /tmp/id_new -N "" -q
-    local new_prv=$(cat /tmp/id_new)
-    local new_pub=$(cat /tmp/id_new.pub)
-    
-    # 获取当前在线节点列表
-    local nodes_res=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
-        -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
-        -d "{\"sql\": \"SELECT id, ip FROM nodes WHERE state = 'online'\"}")
-    local nodes=$(echo "$nodes_res" | jq -r '.result[0].results[].ip')
-    
-    # 步骤 2: 部署新锁 (Dual-Key)
-    log_info "2. 正在向全集群分发新公钥 (双锁过渡)..."
-    for ip in $nodes; do
-        log_info "   -> 正在准备节点: $ip"
-        ssh -i /usr/local/etc/autovpn/cluster_key -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$ip \
-            "echo '$new_pub' >> /root/.ssh/authorized_keys" && log_info "      ✅ 已挂上新锁" || log_warn "      ❌ 挂锁失败: $ip"
-    done
-
-    # 步骤 3: 验证新钥匙
-    log_info "3. 正在验证新钥匙连通性..."
-    local test_ip=$(echo "$nodes" | head -n 1)
-    if [[ ! -z "$test_ip" ]]; then
-        if ssh -i /tmp/id_new -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$test_ip "exit" 2>/dev/null; then
-            log_info "   ✅ 验证通过：新钥匙工作正常！"
-        else
-            log_err "   ❌ 验证失败：新钥匙无法登入，正在回滚..."
-            rm -f /tmp/id_new*
-            return 1
-        fi
-    fi
-
-    # 步骤 4: 提交并清理旧锁
-    log_info "4. 正在同步云端并清理旧公钥..."
-    local old_pub=$(cat /usr/local/etc/autovpn/cluster_key.pub 2>/dev/null)
-    
-    # 更新 D1
-    local sql_upd="INSERT OR REPLACE INTO config (key, val) VALUES ('SSH_PRV', '$new_prv'), ('SSH_PUB', '$new_pub')"
-    local payload=$(jq -n --arg sql "$sql_upd" '{"sql": $sql}')
-    curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
-        -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
-        -d "$payload" > /dev/null
-
-    # 全集群撤旧锁
-    for ip in $nodes; do
-        if [[ ! -z "$old_pub" ]]; then
-            ssh -i /tmp/id_new -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$ip \
-                "sed -i \"\|$old_pub|d\" /root/.ssh/authorized_keys" && log_info "   -> 节点 $ip: 旧锁已卸载" || log_warn "   -> 节点 $ip: 卸木失败"
-        fi
-    done
-
-    # 更新本地
-    # v1.18.0: 轮换时也要同步云端并自毁本地
-    local d1_id=$(cat /usr/local/etc/autovpn/.d1_id 2>/dev/null)
-    local prv_new=$(cat /tmp/id_new)
-    local pub_new=$(cat /tmp/id_new.pub)
-    local sql_upd="INSERT OR REPLACE INTO config (key, val) VALUES ('SSH_PRV', '$prv_new'), ('SSH_PUB', '$pub_new')"
-    local payload=$(jq -n --arg sql "$sql_upd" '{"sql": $sql}')
-    cf_api POST "/d1/database/${d1_id}/query" "$payload" &>/dev/null
-
-    # [v1.18.0] 物理销毁：本地不再保留私钥
-    rm -f /usr/local/etc/autovpn/cluster_key
-    log_info "✨ 密钥轮换圆满完成！已开启【云端保险箱】无痕模式。"
-    rm -f /tmp/id_new*
-}
 
 # 辅助：配置 Guardian Bot (Python 交互式机器人 & 集群增强)
 setup_guardian_bot() {
@@ -823,48 +726,7 @@ setup_guardian_bot() {
         fi
     fi
 
-    # [v1.7.0] 集群信任建立与 SSH 密钥同步
-    log_info "正在同步集群互信秘钥 (v1.7.0)..."
-    mkdir -p /usr/local/etc/autovpn/
-    mkdir -p /root/.ssh && chmod 700 /root/.ssh
-    
-    # [v1.18.25] 配对模式：从 Worker 获取 SSH 公钥，无需 CF 配置
-    local pub_key=""
-    local owner_pub=""
-    
-    if [[ ! -z "$CF_WORKER_URL" && ! -z "$CLUSTER_TOKEN" ]]; then
-        # 通过 Worker API 获取 SSH 公钥
-        local key_res=$(curl -s -X GET "${CF_WORKER_URL}/ssh-keys" \
-            -H "X-Cluster-Token: ${CLUSTER_TOKEN}")
-        pub_key=$(echo "$key_res" | jq -r '.ssh_pub // empty' 2>/dev/null)
-        owner_pub=$(echo "$key_res" | jq -r '.owner_pub // empty' 2>/dev/null)
-        if [[ ! -z "$pub_key" ]]; then
-            log_info "✅ 已从 Worker 获取 SSH 公钥"
-        fi
-    fi
-    
-    # 传统模式：从 D1 获取（需要 CF 配置）
-    if [[ -z "$pub_key" ]]; then
-        local d1_id=$(cat /usr/local/etc/autovpn/.d1_id 2>/dev/null)
-        if [[ ! -z "$d1_id" && ! -z "$CF_ACCOUNT_ID" && ! -z "$CF_API_TOKEN" ]]; then
-            # 尝试从 D1 获取所有密钥 (v1.18.0: 增加 SSH_OWNER_PUB)
-            local key_res=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/d1/database/${d1_id}/query" \
-                -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
-                -d "{\"sql\": \"SELECT key, val FROM config WHERE key IN ('SSH_PRV', 'SSH_PUB', 'SSH_OWNER_PUB')\"}")
-            
-            pub_key=$(echo "$key_res" | jq -r '.result[0].results[] | select(.key=="SSH_PUB") | .val')
-            owner_pub=$(echo "$key_res" | jq -r '.result[0].results[] | select(.key=="SSH_OWNER_PUB") | .val')
-        fi
-    fi
-    
-    # 如果还是没有公钥，生成一对
-    if [[ -z "$pub_key" ]]; then
-        log_info "集群尚未初始化机器人密钥，正在重新生成..."
-        rm -f /tmp/id_cluster*  # 清理旧密钥
-        ssh-keygen -t rsa -b 2048 -f /tmp/id_cluster -N "" -q
-        pub_key=$(cat /tmp/id_cluster.pub)
-        rm -f /tmp/id_cluster*  # 生成后立即删除，不保留
-    fi
+
 
     if [[ "$mode" != "silent" ]]; then
         # 已开启集群模式下的管理菜单
@@ -1668,12 +1530,6 @@ fi
 # 启动入口
 # =================================================================
 main() {
-    if [[ "$ROTATE_KEYS" == "1" ]]; then
-        log_info ">>> 检测到密钥轮换指令，正在启动三步走安全轮换系统..."
-        if [ -f "$ENV_PATH" ]; then source "$ENV_PATH"; fi
-        rotate_cluster_keys
-        exit 0
-    fi
 
 
     
