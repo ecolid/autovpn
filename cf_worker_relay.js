@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.33";
+const VERSION = "v1.19.35";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -93,6 +93,11 @@ export default {
         }
         try {
             await env.DB.prepare("ALTER TABLE nodes ADD COLUMN quality TEXT").run();
+        } catch (e) {
+            // 字段已存在，忽略
+        }
+        try {
+            await env.DB.prepare("ALTER TABLE nodes ADD COLUMN last_traffic TEXT").run();
         } catch (e) {
             // 字段已存在，忽略
         }
@@ -289,7 +294,7 @@ export default {
             const data = await request.json();
             const now = Math.floor(Date.now() / 1000);
 
-            const node = await env.DB.prepare("SELECT state, is_selected FROM nodes WHERE id = ?").bind(data.id).first();
+            const node = await env.DB.prepare("SELECT state, is_selected, last_traffic FROM nodes WHERE id = ?").bind(data.id).first();
             
             // [v1.18.64] 如果是 pending 状态的节点第一次汇报，发送上线通知
             if (node && node.state === 'pending' && data.ip && data.ip !== '0.0.0.0' && data.cpu) {
@@ -351,18 +356,37 @@ export default {
             const isSelected = node ? node.is_selected : 0;
             // 确保 IP 字段有值，防止 null
             const nodeIp = (data.ip && data.ip.trim()) ? data.ip.trim() : '0.0.0.0';
+            
+            // [v1.19.34] 计算增量流量
+            let lastTraffic = { up: 0, down: 0 };
+            try {
+                if (node && node.last_traffic) {
+                    if (typeof node.last_traffic === 'string') {
+                        lastTraffic = JSON.parse(node.last_traffic);
+                    } else if (typeof node.last_traffic === 'object') {
+                        lastTraffic = node.last_traffic;
+                    }
+                }
+            } catch (e) {}
+            
+            const currentUp = data.traff?.up || 0;
+            const currentDown = data.traff?.down || 0;
+            const deltaUp = Math.max(0, currentUp - (lastTraffic.up || 0));
+            const deltaDown = Math.max(0, currentDown - (lastTraffic.down || 0));
+            
+            const lastTrafficStr = JSON.stringify({ up: currentUp, down: currentDown });
 
             try {
                 await env.DB.prepare(`
-                    INSERT INTO nodes (id, hostname, cpu, mem_pct, v, t, state, health, traffic_total, quality, ip, alert_sent, is_selected) 
-                    VALUES (?, ?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, 0, ?)
+                    INSERT INTO nodes (id, hostname, cpu, mem_pct, v, t, state, health, traffic_total, quality, ip, alert_sent, is_selected, last_traffic) 
+                    VALUES (?, ?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, 0, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET 
                     hostname=EXCLUDED.hostname,
                     cpu=EXCLUDED.cpu, mem_pct=EXCLUDED.mem_pct, v=EXCLUDED.v, t=EXCLUDED.t, state='online', health=EXCLUDED.health, 
-                    traffic_total=EXCLUDED.traffic_total, quality=EXCLUDED.quality, 
+                    traffic_total=EXCLUDED.traffic_total, quality=EXCLUDED.quality, last_traffic=EXCLUDED.last_traffic,
                     ip=CASE WHEN EXCLUDED.ip IS NOT NULL AND EXCLUDED.ip != '' THEN EXCLUDED.ip ELSE nodes.ip END,
                     alert_sent=0
-                `).bind(data.id, data.hostname || data.id, data.cpu, data.mem_pct || 0, data.v, now, healthStr, trafficStr, qualityStr, nodeIp, isSelected).run();
+                `).bind(data.id, data.hostname || data.id, data.cpu, data.mem_pct || 0, data.v, now, healthStr, trafficStr, qualityStr, nodeIp, isSelected, lastTrafficStr).run();
             } catch (e) {
                 // [v1.19.16] 记录数据库错误
                 console.error(`[ERROR] 节点 ${data.id} 汇报失败：${e.message}`);
@@ -377,16 +401,26 @@ export default {
                 await env.DB.prepare("DELETE FROM traffic_snapshots WHERE t < ?").bind(now - 86400).run();
             }
             
-            // [v1.19.20] 每 5 分钟上报一次流量到 traffic_stats 表
-            const trafficUp = data.traff?.up || 0;
-            const trafficDown = data.traff?.down || 0;
-            
-            // 计算小时维度（整点）
+            // [v1.19.34] 每 5 分钟上报增量流量到 traffic_stats 表
+            // 先读取当前小时已有的增量流量
             const hourTimestamp = now - (now % 3600);
+            const existingHourly = await env.DB.prepare(`
+                SELECT up, down FROM traffic_stats
+                WHERE node_id = ? AND type = 'hourly' AND t = ?
+            `).bind(data.id, hourTimestamp).first();
+            
+            const existingUp = existingHourly?.up || 0;
+            const existingDown = existingHourly?.down || 0;
+            
+            // 累加增量流量
+            const newHourlyUp = existingUp + deltaUp;
+            const newHourlyDown = existingDown + deltaDown;
+            
+            // 写入小时维度
             await env.DB.prepare(`
                 INSERT OR REPLACE INTO traffic_stats (node_id, up, down, t, type)
                 VALUES (?, ?, ?, ?, 'hourly')
-            `).bind(data.id, trafficUp, trafficDown, hourTimestamp).run();
+            `).bind(data.id, newHourlyUp, newHourlyDown, hourTimestamp).run();
             
             // 计算天维度（零点）
             const dayTimestamp = hourTimestamp - (hourTimestamp % 86400);
