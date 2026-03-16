@@ -582,13 +582,6 @@ deploy_cf_worker() {
     
     sed -i "s/your_private_token_here/${CLUSTER_TOKEN}/g" "$worker_js_tmp"
     
-    # 检查代码是否包含 generate_pair 功能
-    if grep -q "generate_pair" "$worker_js_tmp"; then
-        log_info "✅ 检测到最新版本代码（含配对码功能）"
-    else
-        log_warn "⚠️ 下载的代码可能不是最新版本"
-    fi
-    
     # 准备 Worker 上传
     
     cat > /tmp/metadata.json <<EOF

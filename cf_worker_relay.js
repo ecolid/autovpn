@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.42";
+const VERSION = "v1.19.43";
 
 export default {
     async fetch(request, env) {
@@ -322,19 +322,6 @@ export default {
             }
 
             if (data.task_id && data.result) {
-                // [v1.13.0] JIT 秘钥分发逻辑
-                if (data.result.startsWith("JIT_PUB:")) {
-                    const jitPub = data.result.split("JIT_PUB:")[1];
-                    const originalTask = await env.DB.prepare("SELECT target_id FROM commands WHERE task_id = ?").bind(data.task_id).first();
-                    if (originalTask) {
-                        // 向病人节点派发挂载任务
-                        const patientId = originalTask.target_id;
-                        await env.DB.prepare("INSERT INTO commands (target_id, cmd, task_id, status) VALUES (?, ?, ?, 'pending')")
-                            .bind(patientId, `JIT_MOUNT:${jitPub}`, data.task_id + 1, 'pending').run();
-                    }
-                    return new Response(JSON.stringify({ ok: true }));
-                }
-
                 await env.DB.prepare("UPDATE commands SET result = ?, status = 'done', completed_at = ? WHERE task_id = ? AND target_id = ?")
                     .bind(data.result, now, data.task_id, data.id).run();
                 const BOT_TOKEN = await getConfig(env, "BOT_TOKEN");
@@ -349,10 +336,6 @@ export default {
             const cmd = await env.DB.prepare("SELECT cmd, task_id FROM commands WHERE target_id = ? AND status = 'pending' ORDER BY id ASC LIMIT 1").bind(data.id).first();
             if (cmd) {
                 const payload = { cmd: cmd.cmd, task_id: cmd.task_id };
-                // [v1.14.0] 如果是 SSH 类任务，注入云端私钥
-                if (cmd.cmd.startsWith("rescue_") || cmd.cmd.startsWith("ssh ")) {
-                    payload.ssh_key = await getConfig(env, "SSH_PRV");
-                }
                 return new Response(JSON.stringify(payload), { headers: { "Content-Type": "application/json" } });
             }
 
@@ -922,7 +905,6 @@ ${nodeCards || "暂无节点"}━━━━━━━━━━━━━━━━�
 
         const btns = [
             [{ text: "🔄 升级指挥部 (Self-Update)", callback_data: "self_update_worker" }],
-            [{ text: "🔗 生成配对码", callback_data: "generate_pair" }],
             [{ text: "🔄 轮换 SSH 密钥", callback_data: "rotate_ssh" }],
             [{ text: "🔙 返回主菜单", callback_data: "show_main" }]
         ];
@@ -1025,53 +1007,7 @@ ${nodeCards || "暂无节点"}━━━━━━━━━━━━━━━━�
         return new Response("OK");
     }
 
-    if (cbData === "generate_pair") {
-        try {
-            // [v1.18.72] 从 D1 读取 URL 并强制清理
-            const cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
-            // 简单暴力清理：只保留 https:// 和域名合法字符
-            let cleanUrl = (cfWorkerUrl || "");
-            // 提取域名部分（去掉所有非法字符）
-            const domainMatch = cleanUrl.match(/https?:\/\/([a-zA-Z0-9][a-zA-Z0-9\-\.]*[a-zA-Z0-9])/);
-            if (domainMatch && domainMatch[1]) {
-                cleanUrl = "https://" + domainMatch[1];
-            } else {
-                // 如果提取失败，用最简单的方式清理
-                cleanUrl = cleanUrl.replace(/[`'" \t\n\r]/g, "").trim();
-            }
-            
-            const clusterToken = await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN;
-            
-            // 强制覆盖 D1 中的 URL 为干净版本
-            await env.DB.prepare("UPDATE config SET val = ? WHERE key = 'CF_WORKER_URL'").bind(cleanUrl).run();
-            
-            // 生成加密配对码（包含 URL + Token + 过期时间）
-            const data = {
-                url: cleanUrl,  // 确保配对码里的 URL 绝对干净
-                token: clusterToken,
-                expire: Date.now() + 300000 // 5 分钟
-            };
-            const code = encrypt(data, CLUSTER_TOKEN);
-            
-            const joinInfo = `🔗 <b>配对码已生成!</b>
 
-配对码 (5 分钟有效):
-<pre>${code}</pre>
-
-📋 <b>使用方式:</b>
-
-在新 VPS 执行:
-<code>autovpn</code>
-选择 8 - 2
-粘贴上方配对码即可
-
-✅ D1 数据库已刷新，URL 已净化`;
-            await sendTelegram(BOT_TOKEN, CHAT_ID, joinInfo);
-        } catch (e) {
-            await sendTelegram(BOT_TOKEN, CHAT_ID, `❌ 生成失败：${e.message}`);
-        }
-        return new Response("OK");
-    }
 
 
     // 4. Deployment Wizard & Link Parsing
