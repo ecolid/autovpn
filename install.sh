@@ -943,12 +943,7 @@ except: pass
 # 强制注入 PATH 确保 crontab/systemd 环境正常
 os.environ["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-# [Sentinel] 救援回执模式 - 由 SSH 远程触发
-if "--rescue-worker" in sys.argv:
-    os.system("pkill -9 -f guardian.py")
-    os.system("systemctl restart xray")
-    os.system("systemctl restart autovpn-guardian")
-    sys.exit(0)
+
 
 def run_shell(cmd):
     try: return subprocess.getoutput(cmd)
@@ -1057,39 +1052,7 @@ def main():
             if r.status_code == 200:
                 task = r.json()
                 if task.get("cmd"):
-                    if task["cmd"].startswith("rescue_"):
-                        # [v1.18.0] 增强逻辑：支持从 Worker 注入私钥 (JIT Injection)
-                        target_ip = task["cmd"].split("_")[1]
-                        prv_injected = task.get("ssh_key") # v1.18.0 新字段
-                        
-                        # 1. 内存中还原临时密钥对 (JIT)
-                        jit_key = "/tmp/jit_v" + str(int(time.time()))
-                        # 如果 Worker 没给母钥，则维持 v1.18.0 的临时授权模式
-                        if prv_injected:
-                            with open(jit_key, "w") as f: f.write(prv_injected)
-                            os.chmod(jit_key, 0o600)
-                            ssh_cmd = f"ssh -i {jit_key} -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@{target_ip} 'autovpn --rescue-worker'"
-                        else:
-                            # 回退到 v1.13/医生自建密钥模式
-                            os.system(f"ssh-keygen -t ed25519 -N '' -f {jit_key} -q")
-                            with open(jit_key + ".pub", "r") as f: pub_key = f.read().strip()
-                            sync_data = get_status_data(tid=task['task_id'], res=f"JIT_PUB:{pub_key}")
-                            requests.post(f"{cf_url}/report", json=sync_data, headers={"X-Cluster-Token": c_token}, timeout=10)
-                            time.sleep(5)
-                            ssh_cmd = f"ssh -i {jit_key} -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@{target_ip} 'autovpn --rescue-worker'"
-                        
-                        res = "✅ 救援成功" if os.system(ssh_cmd) == 0 else f"❌ 救援失败: {target_ip}"
-                        os.system(f"rm -f {jit_key}*")
-                        
-                    elif task["cmd"].startswith("JIT_MOUNT:"):
-                        # [v1.18.0] JIT 动态救援：病人端解析
-                        jit_pub = task["cmd"].split("JIT_MOUNT:")[1]
-                        auth_file = "/root/.ssh/authorized_keys"
-                        with open(auth_file, "a") as f: f.write(f"\n{jit_pub} # JIT_AUTOVPN_RESCUE\n")
-                        res = "✅ JIT 密钥已挂载"
-                        # 自动计划 60 秒后清理 (简单实现)
-                        os.system("echo 'sed -i \"/JIT_AUTOVPN_RESCUE/d\" /root/.ssh/authorized_keys' | at now + 1 minute 2>/dev/null")
-                    elif task["cmd"] == "SELF_UPDATE":
+                    if task["cmd"] == "SELF_UPDATE":
                         res = run_shell("wget -qO /tmp/install.sh https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh && bash /tmp/install.sh --update-bot --silent")
                     else:
                         # [v1.18.0] 终极弹性执行：不再盲目加 bash。
