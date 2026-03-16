@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.4";
+const VERSION = "v1.19.5";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -616,10 +616,25 @@ async function handleTelegramUpdate(update, env) {
 
             const cfData = await cfRes.json();
             if (cfData.success) {
-                // [v1.18.57] Worker 更新成功后，强制清理 D1 里的 URL
-                await env.DB.prepare("UPDATE config SET val = TRIM(REPLACE(REPLACE(REPLACE(val, '`', ''), '''', ''), ' ', '')) WHERE key = 'CF_WORKER_URL'").run();
+                // [v1.19.4] Worker 更新成功后，超彻底清理 D1 里的 URL
+                let currentUrl = await getConfig(env, "CF_WORKER_URL");
+                if (currentUrl) {
+                    currentUrl = currentUrl.trim();
+                    // 使用正则表达式提取 https:// 后面的域名
+                    const domainMatch = currentUrl.match(/https?:\/\/([a-zA-Z0-9][a-zA-Z0-9\-\.]*[a-zA-Z0-9])/);
+                    if (domainMatch && domainMatch[1]) {
+                        currentUrl = "https://" + domainMatch[1];
+                    } else {
+                        // 兜底方案：移除所有非法字符
+                        currentUrl = currentUrl.replace(/[`'" \t\n\r\`]/g, "").trim();
+                    }
+                    // 强制更新 D1 数据库中的 URL 为干净版本
+                    if (currentUrl && currentUrl.startsWith("https://")) {
+                        await env.DB.prepare("UPDATE config SET val = ? WHERE key = 'CF_WORKER_URL'").bind(currentUrl).run();
+                    }
+                }
                 
-                const info = `✅ <b>指挥部进化成功!</b>\n\n旧版本：v${currentVersion}\n新版本：v${githubVersion}\n\n脚本已同步至云端，模块已重载。\n\n✅ D1 数据库已清理，配对码 URL 将保持干净`;
+                const info = `✅ <b>指挥部进化成功!</b>\n\n旧版本：v${currentVersion}\n新版本：v${githubVersion}\n\n脚本已同步至云端，模块已重载。\n\n✅ D1 数据库已超彻底清理，URL 将保持绝对干净`;
                 const btns = [[{ text: "🔙 返回", callback_data: "show_security" }]];
                 await sendTelegram(BOT_TOKEN, CHAT_ID, info, { inline_keyboard: btns });
             } else {
