@@ -1349,10 +1349,9 @@ install_reality() {
     },
     { "port": 10085, "listen": "127.0.0.1", "protocol": "dokodemo-door", "settings": { "address": "127.0.0.1" }, "tag": "api" }
   ],
-  "routing": { "rules": [{ "type": "field", "inboundTag": ["api"], "outboundTag": "api" }] },
+  "routing": { "rules": [] },
   "outbounds": [
-    { "protocol": "freedom", "tag": "direct" },
-    { "protocol": "blackhole", "tag": "api" }
+    { "protocol": "freedom", "tag": "direct" }
   ]
 }
 EOF
@@ -1495,15 +1494,10 @@ install_ws_tls() {
     },
     { "port": 10085, "listen": "127.0.0.1", "protocol": "dokodemo-door", "settings": { "address": "127.0.0.1" }, "tag": "api" }
   ],
-  "routing": {
-    "rules": [
-      { "type": "field", "inboundTag": ["api"], "outboundTag": "api" }
-    ]
-  },
+  "routing": { "rules": [] },
   "outbounds": [
     { "tag": "warp", "protocol": "socks", "settings": { "servers": [{"address": "127.0.0.1", "port": 40000}] } },
-    { "tag": "direct", "protocol": "freedom" },
-    { "tag": "api", "protocol": "blackhole" }
+    { "tag": "direct", "protocol": "freedom" }
   ]
 }
 EOF
