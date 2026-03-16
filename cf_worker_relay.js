@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.27";
+const VERSION = "v1.19.28";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -539,7 +539,7 @@ async function handleTelegramUpdate(update, env) {
                 
                 const issues = [];
                 if (h.xray === 'FAIL') issues.push("X🔴");
-                if (h.nginx === 'FAIL') issues.push("N��");
+                if (h.nginx === 'FAIL') issues.push("N🔽");
                 if (h.warp === 'FAIL' || h.warp === 'SKIP') issues.push("W⚪");
                 if (h.loop === 'FAIL') issues.push("L🔴");
                 
@@ -562,7 +562,7 @@ async function handleTelegramUpdate(update, env) {
                 
                 nodeCards += `🌩️ <b>${node.hostname || node.id}</b> [${node.state === 'online' ? '🟢' : '🔴'}]\n`;
                 nodeCards += `├ ${statusText} | IP:${node.ip || "0.0.0.0"} | v${node.v}\n`;
-                nodeCards += `├ 流量：🔼 ${upGB}GB | �� ${downGB}GB\n`;
+                nodeCards += `├ 流量：🔼 ${upGB}GB | 🔽 ${downGB}GB\n`;
                 nodeCards += `└ 负荷：${loadPct.toFixed(1)}%\n\n`;
             }
         }
@@ -1252,7 +1252,7 @@ ${nodeCards || "暂无节点"}━━━━━━━━━━━━━━━━�
             [{ text: "🔍 诊断查询", callback_data: `sub_diag_${nodeId}` }],
             [{ text: "📋 生成部署命令", callback_data: `gen_deploy_${nodeId}` }],
             [{ text: "� 重启节点", callback_data: `restart_node_${nodeId}` }],
-            [{ text: "��️ 删除节点", callback_data: `delnode_${nodeId}` }],
+            [{ text: "🔽️ 删除节点", callback_data: `delnode_${nodeId}` }],
             [{ text: "🔙 返回", callback_data: "show_status" }]
         ];
         await sendTelegram(BOT_TOKEN, CHAT_ID, `🎮 <b>管理:</b> <code>${nodeId}</code>`, { inline_keyboard: btns }, update.callback_query.message.message_id);
