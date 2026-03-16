@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.11";
+const VERSION = "v1.19.12";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -99,28 +99,36 @@ export default {
             }
             
             if (action === "verify") {
-                // 验证配对码（无需认证）
-                const data = decrypt(code, CLUSTER_TOKEN);
-                
-                if (!data) {
-                    return new Response(JSON.stringify({ success: false, error: "配对码无效或已损坏" }));
+                // [v1.19.8] 验证配对码（从 D1 查询，无需加密）
+                if (!code || code.length !== 6) {
+                    return new Response(JSON.stringify({ success: false, error: "配对码格式错误" }));
                 }
                 
                 const now = Date.now();
-                if (now > data.expire) {
+                
+                // 从 D1 查询配对码
+                const pairRecord = await env.DB.prepare("SELECT * FROM pair_codes WHERE code = ?").bind(code).first();
+                
+                if (!pairRecord) {
+                    return new Response(JSON.stringify({ success: false, error: "配对码无效或已过期" }));
+                }
+                
+                if (now > pairRecord.expire_at) {
+                    // 清理过期的配对码
+                    await env.DB.prepare("DELETE FROM pair_codes WHERE code = ?").bind(code).run();
                     return new Response(JSON.stringify({ success: false, error: "配对码已过期，请重新生成" }));
                 }
                 
                 // [v1.18.59] 配对验证时，强制清洗 D1 中的 URL（双保险）
-                const cleanUrl = (data.url || "").replace(/[`'" \t\n\r]/g, "").trim();
+                const cleanUrl = (pairRecord.cf_worker_url || "").replace(/[`'" \t\n\r]/g, "").trim();
                 await env.DB.prepare("UPDATE config SET val = ? WHERE key = 'CF_WORKER_URL'").bind(cleanUrl).run();
                 
                 // [v1.19.8] 快速扩容模式：不预先生成 node_id，让 VPS 自己上报 hostname
                 // 返回 cluster_token 和 cf_worker_url，让 install.sh 配置环境
                 return new Response(JSON.stringify({ 
                     success: true, 
-                    cf_worker_url: (data.url || "").replace(/[`'" \t\n\r]/g, "").trim(),
-                    cluster_token: data.token,
+                    cf_worker_url: cleanUrl,
+                    cluster_token: pairRecord.cluster_token,
                     message: "✅ 配对码验证成功！将使用 VPS 的 hostname 作为节点 ID"
                 }));
             }
@@ -872,12 +880,6 @@ async function handleTelegramUpdate(update, env) {
         const pairCode = generatePairCode();
         const now = Date.now();
         
-        // 保存到 D1，5 分钟有效
-        await env.DB.prepare(`
-            INSERT INTO pair_codes (code, cluster_token, expire_at) 
-            VALUES (?, ?, ?)
-        `).bind(pairCode, await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN, now + 300000).run();
-        
         let cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
         cfWorkerUrl = (cfWorkerUrl || "").trim();
         const domainMatch = cfWorkerUrl.match(/https?:\/\/([a-zA-Z0-9][a-zA-Z0-9\-\.]*[a-zA-Z0-9])/);
@@ -888,6 +890,12 @@ async function handleTelegramUpdate(update, env) {
         }
         
         const clusterToken = await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN;
+        
+        // 保存到 D1，5 分钟有效
+        await env.DB.prepare(`
+            INSERT INTO pair_codes (code, cluster_token, cf_worker_url, expire_at) 
+            VALUES (?, ?, ?, ?)
+        `).bind(pairCode, clusterToken, cfWorkerUrl, now + 300000).run();
         
         const message = `🚀 <b>快速扩容部署命令</b>\n\n` +
             `💡 使用方法:\n` +
