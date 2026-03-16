@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.23";
+const VERSION = "v1.19.26";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -592,9 +592,6 @@ ${nodeCards || "暂无节点"}━━━━━━━━━━━━━━━━�
         return new Response("OK");
     }
 
-    }
-
-    }
 
     // ============================================================================
     // 1. 集群令牌页面
