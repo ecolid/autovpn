@@ -1347,7 +1347,8 @@ install_reality() {
         }
       }
     },
-    { "port": 10085, "listen": "127.0.0.1", "protocol": "dokodemo-door", "settings": { "address": "127.0.0.1" }, "tag": "api" }
+    { "port": 10085, "listen": "127.0.0.1", "protocol": "dokodemo-door", "settings": { "address": "127.0.0.1" }, "tag": "api" },
+    { "port": 10086, "listen": "127.0.0.1", "protocol": "socks", "settings": { "auth": "noauth", "udp": true } }
   ],
   "routing": { "rules": [] },
   "outbounds": [
@@ -1492,7 +1493,8 @@ install_ws_tls() {
       "settings": { "clients": [{"id": "$UUID"}], "decryption": "none" },
       "streamSettings": { "network": "ws", "wsSettings": { "path": "$WS_PATH" } }
     },
-    { "port": 10085, "listen": "127.0.0.1", "protocol": "dokodemo-door", "settings": { "address": "127.0.0.1" }, "tag": "api" }
+    { "port": 10085, "listen": "127.0.0.1", "protocol": "dokodemo-door", "settings": { "address": "127.0.0.1" }, "tag": "api" },
+    { "port": 10086, "listen": "127.0.0.1", "protocol": "socks", "settings": { "auth": "noauth", "udp": true } }
   ],
   "routing": { "rules": [] },
   "outbounds": [
