@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.16";
+const VERSION = "v1.19.17";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -51,6 +51,38 @@ export default {
                 expire_at INTEGER NOT NULL
             )
         `).run();
+        
+        // [v1.19.17] 检查并添加 nodes 表缺失的字段
+        try {
+            await env.DB.prepare("ALTER TABLE nodes ADD COLUMN hostname TEXT").run();
+        } catch (e) {
+            // 字段已存在，忽略
+        }
+        try {
+            await env.DB.prepare("ALTER TABLE nodes ADD COLUMN cpu TEXT").run();
+        } catch (e) {
+            // 字段已存在，忽略
+        }
+        try {
+            await env.DB.prepare("ALTER TABLE nodes ADD COLUMN mem_pct REAL").run();
+        } catch (e) {
+            // 字段已存在，忽略
+        }
+        try {
+            await env.DB.prepare("ALTER TABLE nodes ADD COLUMN health TEXT").run();
+        } catch (e) {
+            // 字段已存在，忽略
+        }
+        try {
+            await env.DB.prepare("ALTER TABLE nodes ADD COLUMN traffic_total TEXT").run();
+        } catch (e) {
+            // 字段已存在，忽略
+        }
+        try {
+            await env.DB.prepare("ALTER TABLE nodes ADD COLUMN quality TEXT").run();
+        } catch (e) {
+            // 字段已存在，忽略
+        }
         
         const url = new URL(request.url);
 
