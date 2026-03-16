@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.17";
+const VERSION = "v1.19.18";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -49,6 +49,19 @@ export default {
                 cluster_token TEXT NOT NULL,
                 cf_worker_url TEXT,
                 expire_at INTEGER NOT NULL
+            )
+        `).run();
+        
+        // [v1.19.18] 初始化流量统计表（小时/天/月维度）
+        await env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS traffic_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                node_id TEXT NOT NULL,
+                up INTEGER NOT NULL,
+                down INTEGER NOT NULL,
+                t INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                UNIQUE(node_id, t, type)
             )
         `).run();
         
@@ -451,16 +464,74 @@ async function handleTelegramUpdate(update, env) {
     const cbData = update.callback_query ? update.callback_query.data : null;
 
     if (text === "/start" || text === "/menu" || cbData === "show_main") {
-        const welcome = `🏰 <b>AutoVPN 守护者集群控制台 (v${VERSION})</b>\n\n请选择操作模块:`;
+        // [v1.19.18] 获取节点统计
+        const nodes = await env.DB.prepare("SELECT id, hostname, state, ip, cpu, mem_pct, health, traffic_total, v FROM nodes WHERE id != 'INSTALL_VERIFY' ORDER BY t DESC").all();
+        
+        let onlineCount = 0, offlineCount = 0;
+        let nodeCards = "";
+        
+        if (nodes.results && nodes.results.length > 0) {
+            for (const node of nodes.results) {
+                if (node.state === 'online') onlineCount++;
+                else offlineCount++;
+                
+                // 解析健康状态
+                let statusIcon = "⚫";
+                let statusText = "未知";
+                try {
+                    const h = JSON.parse(node.health || "{}");
+                    const issues = [];
+                    if (h.xray === 'FAIL') issues.push("X🔴");
+                    if (h.nginx === 'FAIL') issues.push("N🔴");
+                    if (h.warp === 'FAIL' || h.warp === 'SKIP') issues.push("W⚪");
+                    if (h.loop === 'FAIL') issues.push("L🔴");
+                    
+                    if (issues.length === 0) {
+                        statusIcon = "🟢";
+                        statusText = "全好";
+                    } else if (issues.length <= 2) {
+                        statusIcon = "🟡";
+                        statusText = issues.join(" ");
+                    } else {
+                        statusIcon = "🔴";
+                        statusText = "故障";
+                    }
+                } catch (e) {}
+                
+                // 生成节点卡片
+                const loadPct = node.cpu ? parseFloat(node.cpu) : 0;
+                nodeCards += `${statusIcon} <b>${node.hostname || node.id}</b>\n`;
+                nodeCards += `   ${statusText} | IP:${node.ip || "0.0.0.0"} | ${node.v || "未知"}\n`;
+                nodeCards += `   └ 负荷：${loadPct.toFixed(1)}%\n\n`;
+            }
+        }
+        
+        const totalCount = nodes.results ? nodes.results.length : 0;
+        
+        const welcome = `🏰 <b>AutoVPN 守护者集群 (v${VERSION})</b>
+
+━━━━━━━━━━━━━━━━━━━━━━
+📈 集群统计
+━━━━━━━━━━━━━━━━━━━━━━
+�� 在线：${onlineCount}  |  🔴 离线：${offlineCount}  |  📊 总计：${totalCount}
+━━━━━━━━━━━━━━━━━━━━━━
+
+🖥️ 节点状态
+━━━━━━━━━━━━━━━━━━━━━━
+${nodeCards || "暂无节点"}━━━━━━━━━━━━━━━━━━━━━━
+
+快速操作`;
+        
         const btns = [
-            [{ text: "📊 节点看板 (全维度)", callback_data: "show_status" }],
-            [{ text: "� 快速扩容", callback_data: "quick_deploy" }, { text: "📡 路由管理", callback_data: "show_routing" }],
-            [{ text: "🚑 救援日志", callback_data: "show_rescue" }, { text: "🛡️ 安全中心", callback_data: "show_security" }],
+            [{ text: "📊 节点看板", callback_data: "show_status" }, { text: "🚀 快速扩容", callback_data: "quick_deploy" }, { text: "🔄 升级指挥部", callback_data: "self_update_worker" }],
+            [{ text: "�� 集群令牌", callback_data: "show_cluster_token" }, { text: "🚑 救援日志", callback_data: "show_rescue" }, { text: "🗑️ 节点管理", callback_data: "node_management" }],
+            [{ text: "📊 数据统计", callback_data: "show_traffic_stats" }],
             [{ text: "⚙️ 向导说明", url: "https://github.com/ecolid/autovpn" }]
         ];
         await sendTelegram(BOT_TOKEN, CHAT_ID, welcome, { inline_keyboard: btns }, update.callback_query?.message.message_id);
         return new Response("OK");
     }
+
 
     if (text === "/update" || cbData === "show_update") {
         const info = "☁️ <b>云端同步中心</b>\n\n点击下方按钮从 GitHub 拉取最新脚本并重新部署 Worker。";
