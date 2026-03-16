@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.14";
+const VERSION = "v1.19.15";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -143,7 +143,21 @@ export default {
                 
                 const node = await env.DB.prepare("SELECT * FROM nodes WHERE id = ?").bind(nodeId).first();
                 if (!node) {
-                    return new Response(JSON.stringify({ error: "节点不存在" }));
+                    // [v1.19.15] 节点不存在时自动创建（用于新节点首次汇报）
+                    const now = Math.floor(Date.now() / 1000);
+                    await env.DB.prepare(`
+                        INSERT INTO nodes (id, hostname, state, alert_sent, is_selected, t) 
+                        VALUES (?, 'pending', 'pending', 0, 1, ?)
+                    `).bind(nodeId, now).run();
+                    
+                    return new Response(JSON.stringify({
+                        status: 'pending',
+                        ip: null,
+                        cpu: null,
+                        hostname: 'pending',
+                        v: null,
+                        t: now
+                    }));
                 }
                 
                 return new Response(JSON.stringify({
