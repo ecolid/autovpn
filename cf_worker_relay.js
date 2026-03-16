@@ -115,23 +115,13 @@ export default {
                 const cleanUrl = (data.url || "").replace(/[`'" \t\n\r]/g, "").trim();
                 await env.DB.prepare("UPDATE config SET val = ? WHERE key = 'CF_WORKER_URL'").bind(cleanUrl).run();
                 
-                // 新节点注册：生成节点 ID 并写入 D1
-                const nodeId = `node_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-                const registerTime = Math.floor(Date.now() / 1000);
-                // [v1.19.6] 修复：必须包含 hostname 字段，否则 install.sh 验证会失败
-                await env.DB.prepare(`
-                    INSERT INTO nodes (id, hostname, state, alert_sent, is_selected, t) 
-                    VALUES (?, ?, ?, ?, ?, ?)
-                `).bind(nodeId, 'pending_init', 'pending', 0, 1, registerTime).run();
-                
-                // [v1.18.67] 立即返回成功，让 install.sh 继续启动 guardian
-                // 节点汇报由 guardian.py 主动发起，不在 /verify 接口等待
+                // [v1.19.8] 快速扩容模式：不预先生成 node_id，让 VPS 自己上报 hostname
+                // 返回 cluster_token 和 cf_worker_url，让 install.sh 配置环境
                 return new Response(JSON.stringify({ 
                     success: true, 
-                    node_id: nodeId,
                     cf_worker_url: (data.url || "").replace(/[`'" \t\n\r]/g, "").trim(),
                     cluster_token: data.token,
-                    message: "✅ 注册成功！请启动 guardian 开始汇报状态"
+                    message: "✅ 配对码验证成功！将使用 VPS 的 hostname 作为节点 ID"
                 }));
             }
             
@@ -878,15 +868,15 @@ async function handleTelegramUpdate(update, env) {
     }
 
     if (cbData === "quick_deploy") {
-        // [v1.19.8] 快速扩容：自动生成新节点 ID 并返回部署命令
-        const newNodeId = `node_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-        const now = Math.floor(Date.now() / 1000);
+        // [v1.19.8] 快速扩容：生成临时配对码，让 VPS 自动上报 hostname
+        const pairCode = generatePairCode();
+        const now = Date.now();
         
-        // 预注册到 D1（pending 状态）
+        // 保存到 D1，5 分钟有效
         await env.DB.prepare(`
-            INSERT INTO nodes (id, hostname, state, alert_sent, is_selected, t) 
-            VALUES (?, 'pending_auto', 'pending', 0, 1, ?)
-        `).bind(newNodeId, now).run();
+            INSERT INTO pair_codes (code, cluster_token, expire_at) 
+            VALUES (?, ?, ?)
+        `).bind(pairCode, await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN, now + 300000).run();
         
         let cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
         cfWorkerUrl = (cfWorkerUrl || "").trim();
@@ -898,17 +888,19 @@ async function handleTelegramUpdate(update, env) {
         }
         
         const clusterToken = await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN;
-        const deployCmd = `curl -sL "${cfWorkerUrl}/deploy" | bash -s -- --deploy-silent --cf-worker-url "${cfWorkerUrl}" --cluster-token "${clusterToken}" --node-id "${newNodeId}"`;
         
         const message = `🚀 <b>快速扩容部署命令</b>\n\n` +
-            `✨ 已自动生成新节点 ID: <code>${newNodeId}</code>\n\n` +
             `💡 使用方法:\n` +
             `1. 复制下方命令\n` +
             `2. 在<b>新 VPS</b>终端粘贴并执行\n` +
-            `3. 等待 30 秒后返回查看状态\n\n` +
-            `<code>${deployCmd}</code>\n\n` +
-            `⚠️ 提示：长按消息即可复制命令\n\n` +
-            `📊 部署后发送 /status 查看节点状态`;
+            `3. 脚本会自动使用 VPS 的 hostname 注册\n\n` +
+            `<code>autovpn --pair "${pairCode}" --cf-worker-url "${cfWorkerUrl}"</code>\n\n` +
+            `⚠️ 提示：\n` +
+            `• 配对码 5 分钟有效\n` +
+            `• 会自动使用 VPS 的 hostname 作为节点 ID\n` +
+            `• 部署后发送 /status 查看状态\n\n` +
+            `📝 如果想自定义节点名，先修改 VPS 的 hostname:\n` +
+            `<code>hostnamectl set-hostname 您的名字</code>`;
         
         const btns = [
             [{ text: "🔄 再创建一个", callback_data: "quick_deploy" }],

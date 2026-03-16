@@ -1868,6 +1868,10 @@ main() {
         CF_WORKER_URL=$(echo "$pair_res" | jq -r '.cf_worker_url' | xargs)
         CLUSTER_TOKEN=$(echo "$pair_res" | jq -r '.cluster_token')
         
+        # [v1.19.8] 使用 VPS 的 hostname 作为节点 ID
+        NODE_ID=$(hostname)
+        log_info "📋 节点 ID: $NODE_ID (VPS hostname)"
+        
         log_info "✅ 配对成功！正在配置集群..."
         MODE="silent"
         CLUSTER_MODE="on"
