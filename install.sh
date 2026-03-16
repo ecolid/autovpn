@@ -1142,10 +1142,19 @@ EOF
     systemctl daemon-reload
     
     # [v1.18.46] 配对模式下注入正确的 NODE_ID
-    log_info "[DEBUG] NODE_ID='$NODE_ID', hostname='$(hostname)'"
-    if [[ -n "$NODE_ID" && "$NODE_ID" != "$(hostname)" ]]; then
-        sed -i "s/^NODE_ID = .*/NODE_ID = \"$NODE_ID\"/" /usr/local/etc/autovpn/guardian.py
-        log_info "✅ 节点 ID 已注入：$NODE_ID"
+    # [v1.19.6] 修复：NODE_ID 必须从 .env 读取，因为函数作用域问题
+    local env_node_id=""
+    if [[ -f "$ENV_PATH" ]]; then
+        env_node_id=$(grep "^NODE_ID=" "$ENV_PATH" 2>/dev/null | cut -d'=' -f2 | tr -d '"')
+    fi
+    log_info "[DEBUG] NODE_ID 参数='$NODE_ID', .env 中的 NODE_ID='$env_node_id', hostname='$(hostname)'"
+    
+    # 优先使用 .env 中的 NODE_ID（配对模式已保存）
+    local final_node_id="${NODE_ID:-$env_node_id}"
+    
+    if [[ -n "$final_node_id" && "$final_node_id" != "$(hostname)" ]]; then
+        sed -i "s/^NODE_ID = .*/NODE_ID = \"$final_node_id\"/" /usr/local/etc/autovpn/guardian.py
+        log_info "✅ 节点 ID 已注入：$final_node_id"
     else
         log_info "⚠️ 跳过 NODE_ID 注入（NODE_ID 为空或与 hostname 相同）"
     fi
@@ -1708,6 +1717,12 @@ show_menu() {
                                 log_info "正在等待 guardian 第一次汇报并验证..."
                                 local verify_success=false
                                 
+                                # [v1.19.6] 修复：从 .env 读取 NODE_ID，确保变量作用域正确
+                                local verify_node_id="$NODE_ID"
+                                if [[ -z "$verify_node_id" ]] && [[ -f "$ENV_PATH" ]]; then
+                                    verify_node_id=$(grep "^NODE_ID=" "$ENV_PATH" 2>/dev/null | cut -d'=' -f2 | tr -d '"')
+                                fi
+                                
                                 for i in {1..6}; do
                                     sleep 5
                                     
@@ -1715,7 +1730,7 @@ show_menu() {
                                     local check_res=$(curl -s -X POST "${CF_WORKER_URL}/pair" \
                                         -H "Content-Type: application/json" \
                                         -H "X-Cluster-Token: ${CLUSTER_TOKEN}" \
-                                        -d "{\"action\": \"check\", \"node_id\": \"$NODE_ID\"}")
+                                        -d "{\"action\": \"check\", \"node_id\": \"$verify_node_id\"}")
                                     
                                     local node_status=$(echo "$check_res" | jq -r '.status' 2>/dev/null)
                                     local node_ip=$(echo "$check_res" | jq -r '.ip' 2>/dev/null)

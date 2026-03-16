@@ -118,10 +118,11 @@ export default {
                 // 新节点注册：生成节点 ID 并写入 D1
                 const nodeId = `node_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
                 const registerTime = Math.floor(Date.now() / 1000);
+                // [v1.19.6] 修复：必须包含 hostname 字段，否则 install.sh 验证会失败
                 await env.DB.prepare(`
-                    INSERT INTO nodes (id, state, alert_sent, is_selected, t) 
-                    VALUES (?, 'pending', 0, 1, ?)
-                `).bind(nodeId, registerTime).run();
+                    INSERT INTO nodes (id, hostname, state, alert_sent, is_selected, t) 
+                    VALUES (?, ?, ?, ?, ?, ?)
+                `).bind(nodeId, 'pending_init', 'pending', 0, 1, registerTime).run();
                 
                 // [v1.18.67] 立即返回成功，让 install.sh 继续启动 guardian
                 // 节点汇报由 guardian.py 主动发起，不在 /verify 接口等待
