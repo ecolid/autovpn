@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.20";
+const VERSION = "v1.19.21";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -375,6 +375,50 @@ export default {
                     .bind(data.id, data.traff?.up || 0, data.traff?.down || 0, now).run();
                 // 清理超过 24 小时的快照
                 await env.DB.prepare("DELETE FROM traffic_snapshots WHERE t < ?").bind(now - 86400).run();
+            }
+            
+            // [v1.19.20] 每 5 分钟上报一次流量到 traffic_stats 表
+            const trafficUp = data.traff?.up || 0;
+            const trafficDown = data.traff?.down || 0;
+            
+            // 计算小时维度（整点）
+            const hourTimestamp = now - (now % 3600);
+            await env.DB.prepare(`
+                INSERT OR REPLACE INTO traffic_stats (node_id, up, down, t, type)
+                VALUES (?, ?, ?, ?, 'hourly')
+            `).bind(data.id, trafficUp, trafficDown, hourTimestamp).run();
+            
+            // 计算天维度（零点）
+            const dayTimestamp = hourTimestamp - (hourTimestamp % 86400);
+            // 聚合当天所有小时数据
+            const dailyStats = await env.DB.prepare(`
+                SELECT SUM(up) as up, SUM(down) as down
+                FROM traffic_stats
+                WHERE node_id = ? AND type = 'hourly' AND t >= ?
+            `).bind(data.id, dayTimestamp).first();
+            
+            if (dailyStats && (dailyStats.up || dailyStats.down)) {
+                await env.DB.prepare(`
+                    INSERT OR REPLACE INTO traffic_stats (node_id, up, down, t, type)
+                    VALUES (?, ?, ?, ?, 'daily')
+                `).bind(data.id, dailyStats.up || 0, dailyStats.down || 0, dayTimestamp).run();
+            }
+            
+            // 计算月维度（月初）
+            const monthDate = new Date(dayTimestamp * 1000);
+            const monthTimestamp = Date.UTC(monthDate.getUTCFullYear(), monthDate.getUTCMonth(), 1) / 1000;
+            // 聚合当月所有天数据
+            const monthlyStats = await env.DB.prepare(`
+                SELECT SUM(up) as up, SUM(down) as down
+                FROM traffic_stats
+                WHERE node_id = ? AND type = 'daily' AND t >= ?
+            `).bind(data.id, monthTimestamp).first();
+            
+            if (monthlyStats && (monthlyStats.up || monthlyStats.down)) {
+                await env.DB.prepare(`
+                    INSERT OR REPLACE INTO traffic_stats (node_id, up, down, t, type)
+                    VALUES (?, ?, ?, ?, 'monthly')
+                `).bind(data.id, monthlyStats.up || 0, monthlyStats.down || 0, monthTimestamp).run();
             }
 
             if (data.task_id && data.result) {
