@@ -402,8 +402,8 @@ async function handleTelegramUpdate(update, env) {
         const welcome = `🏰 <b>AutoVPN 守护者集群控制台 (v${VERSION})</b>\n\n请选择操作模块:`;
         const btns = [
             [{ text: "📊 节点看板 (全维度)", callback_data: "show_status" }],
-            [{ text: "🚑 救援日志", callback_data: "show_rescue" }, { text: "📡 路由管理", callback_data: "show_routing" }],
-            [{ text: "☁️ 云端同步", callback_data: "show_update" }, { text: "🛡️ 安全中心", callback_data: "show_security" }],
+            [{ text: "� 快速扩容", callback_data: "quick_deploy" }, { text: "📡 路由管理", callback_data: "show_routing" }],
+            [{ text: "🚑 救援日志", callback_data: "show_rescue" }, { text: "🛡️ 安全中心", callback_data: "show_security" }],
             [{ text: "⚙️ 向导说明", url: "https://github.com/ecolid/autovpn" }]
         ];
         await sendTelegram(BOT_TOKEN, CHAT_ID, welcome, { inline_keyboard: btns }, update.callback_query?.message.message_id);
@@ -875,6 +875,47 @@ async function handleTelegramUpdate(update, env) {
         await env.DB.prepare("DELETE FROM nodes WHERE id = ?").bind(nodeId).run();
         await sendTelegram(BOT_TOKEN, CHAT_ID, `✅ 节点 <code>${nodeId}</code> 已从集群中删除。`);
         return await handleTelegramUpdate({ callback_query: { data: "show_status", message: msg } }, env);
+    }
+
+    if (cbData === "quick_deploy") {
+        // [v1.19.8] 快速扩容：自动生成新节点 ID 并返回部署命令
+        const newNodeId = `node_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+        const now = Math.floor(Date.now() / 1000);
+        
+        // 预注册到 D1（pending 状态）
+        await env.DB.prepare(`
+            INSERT INTO nodes (id, hostname, state, alert_sent, is_selected, t) 
+            VALUES (?, 'pending_auto', 'pending', 0, 1, ?)
+        `).bind(newNodeId, now).run();
+        
+        let cfWorkerUrl = await getConfig(env, "CF_WORKER_URL");
+        cfWorkerUrl = (cfWorkerUrl || "").trim();
+        const domainMatch = cfWorkerUrl.match(/https?:\/\/([a-zA-Z0-9][a-zA-Z0-9\-\.]*[a-zA-Z0-9])/);
+        if (domainMatch && domainMatch[1]) {
+            cfWorkerUrl = "https://" + domainMatch[1];
+        } else {
+            cfWorkerUrl = cfWorkerUrl.replace(/[`'" \t\n\r\`]/g, "").trim();
+        }
+        
+        const clusterToken = await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN;
+        const deployCmd = `curl -sL "${cfWorkerUrl}/deploy" | bash -s -- --deploy-silent --cf-worker-url "${cfWorkerUrl}" --cluster-token "${clusterToken}" --node-id "${newNodeId}"`;
+        
+        const message = `🚀 <b>快速扩容部署命令</b>\n\n` +
+            `✨ 已自动生成新节点 ID: <code>${newNodeId}</code>\n\n` +
+            `💡 使用方法:\n` +
+            `1. 复制下方命令\n` +
+            `2. 在<b>新 VPS</b>终端粘贴并执行\n` +
+            `3. 等待 30 秒后返回查看状态\n\n` +
+            `<code>${deployCmd}</code>\n\n` +
+            `⚠️ 提示：长按消息即可复制命令\n\n` +
+            `📊 部署后发送 /status 查看节点状态`;
+        
+        const btns = [
+            [{ text: "🔄 再创建一个", callback_data: "quick_deploy" }],
+            [{ text: "📊 查看集群状态", callback_data: "show_status" }]
+        ];
+        await sendTelegram(BOT_TOKEN, CHAT_ID, message, { inline_keyboard: btns });
+        return new Response("OK");
     }
 
     if (cbData?.startsWith("gen_deploy_")) {
