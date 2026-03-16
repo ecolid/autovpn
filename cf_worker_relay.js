@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.15";
+const VERSION = "v1.19.16";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -307,16 +307,22 @@ export default {
             // 确保 IP 字段有值，防止 null
             const nodeIp = (data.ip && data.ip.trim()) ? data.ip.trim() : '0.0.0.0';
 
-            await env.DB.prepare(`
-                INSERT INTO nodes (id, hostname, cpu, mem_pct, v, t, state, health, traffic_total, quality, ip, alert_sent, is_selected) 
-                VALUES (?, ?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, 0, ?)
-                ON CONFLICT(id) DO UPDATE SET 
-                hostname=EXCLUDED.hostname,
-                cpu=EXCLUDED.cpu, mem_pct=EXCLUDED.mem_pct, v=EXCLUDED.v, t=EXCLUDED.t, state='online', health=EXCLUDED.health, 
-                traffic_total=EXCLUDED.traffic_total, quality=EXCLUDED.quality, 
-                ip=CASE WHEN EXCLUDED.ip IS NOT NULL AND EXCLUDED.ip != '' THEN EXCLUDED.ip ELSE nodes.ip END,
-                alert_sent=0
-            `).bind(data.id, data.hostname, data.cpu, data.mem_pct, data.v, now, healthStr, trafficStr, qualityStr, nodeIp, isSelected).run();
+            try {
+                await env.DB.prepare(`
+                    INSERT INTO nodes (id, hostname, cpu, mem_pct, v, t, state, health, traffic_total, quality, ip, alert_sent, is_selected) 
+                    VALUES (?, ?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, 0, ?)
+                    ON CONFLICT(id) DO UPDATE SET 
+                    hostname=EXCLUDED.hostname,
+                    cpu=EXCLUDED.cpu, mem_pct=EXCLUDED.mem_pct, v=EXCLUDED.v, t=EXCLUDED.t, state='online', health=EXCLUDED.health, 
+                    traffic_total=EXCLUDED.traffic_total, quality=EXCLUDED.quality, 
+                    ip=CASE WHEN EXCLUDED.ip IS NOT NULL AND EXCLUDED.ip != '' THEN EXCLUDED.ip ELSE nodes.ip END,
+                    alert_sent=0
+                `).bind(data.id, data.hostname || data.id, data.cpu, data.mem_pct || 0, data.v, now, healthStr, trafficStr, qualityStr, nodeIp, isSelected).run();
+            } catch (e) {
+                // [v1.19.16] 记录数据库错误
+                console.error(`[ERROR] 节点 ${data.id} 汇报失败：${e.message}`);
+                return new Response(JSON.stringify({ error: '数据库操作失败', details: e.message }), { status: 500 });
+            }
 
             // 每小时整点存一个持久快照 (Analytics)
             if (now % 3600 < 15) {
