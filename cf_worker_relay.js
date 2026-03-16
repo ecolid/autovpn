@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.29";
+const VERSION = "v1.19.30";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -556,14 +556,19 @@ async function handleTelegramUpdate(update, env) {
                 }
                 
                 // 生成节点卡片（增强版）
-                const loadPct = node.cpu ? parseFloat(node.cpu) : 0;
                 const upGB = ((t.up || 0) / (1024 ** 3)).toFixed(2);
                 const downGB = ((t.down || 0) / (1024 ** 3)).toFixed(2);
                 
+                // 显示完整的服务状态
+                const x = h.xray === "OK" ? "🟢" : "🔴";
+                const n = h.nginx === "OK" ? "🟢" : "🔴";
+                const w = (h.warp === "OFF" || h.warp === "SKIP") ? "⚪" : (h.warp === "OK" ? "🟢" : "🔴");
+                const l = h.loop === "OK" ? "🟢" : "🔴";
+                
                 nodeCards += `🌩️ <b>${node.hostname || node.id}</b> [${node.state === 'online' ? '🟢' : '🔴'}]\n`;
-                nodeCards += `├ ${statusText} | IP:${node.ip || "0.0.0.0"} | v${node.v}\n`;
+                nodeCards += `├ 指标：X:${x} N:${n} W:${w} L:${l} | IP:${node.ip || "0.0.0.0"} | v${node.v}\n`;
                 nodeCards += `├ 流量：🔼 ${upGB}GB | 🔽 ${downGB}GB\n`;
-                nodeCards += `└ 负荷：${loadPct.toFixed(1)}%\n\n`;
+                nodeCards += `└ 负荷：${genBar(node.cpu || 0)}\n\n`;
             }
         }
         
