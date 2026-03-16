@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.12";
+const VERSION = "v1.19.13";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -47,6 +47,7 @@ export default {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 code TEXT UNIQUE NOT NULL,
                 cluster_token TEXT NOT NULL,
+                cf_worker_url TEXT,
                 expire_at INTEGER NOT NULL
             )
         `).run();
@@ -361,6 +362,7 @@ export default {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 code TEXT UNIQUE NOT NULL,
                 cluster_token TEXT NOT NULL,
+                cf_worker_url TEXT,
                 expire_at INTEGER NOT NULL
             )
         `).run();
