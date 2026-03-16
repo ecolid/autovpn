@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.26";
+const VERSION = "v1.19.27";
 const PAIR_CODE_EXPIRE = 300; // 配对码有效期 5 分钟
 
 function generatePairCode() {
@@ -985,7 +985,10 @@ ${nodeCards || "暂无节点"}━━━━━━━━━━━━━━━━�
             
             // 保持版本兼容性：注入当前的 CLUSTER_TOKEN
             const clusterToken = await getConfig(env, "CLUSTER_TOKEN") || CLUSTER_TOKEN;
-            code = code.replace(/const CLUSTER_TOKEN = ".*";/, `const CLUSTER_TOKEN = "${clusterToken}";`);
+            
+            // [v1.19.26] 安全注入：先转义特殊字符
+            const escapedToken = clusterToken.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+            code = code.replace(/const CLUSTER_TOKEN = ".*";/, `const CLUSTER_TOKEN = "${escapedToken}";`);
 
             // 构造上传 Payload (Multipart)
             const formData = new FormData();
