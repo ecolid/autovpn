@@ -993,18 +993,22 @@ def check_health():
         health["loop"] = "FAIL"
 
     # [v1.18.0] WARP 探测深度优化
+    # [v1.19.30] 修复 WARP 检测逻辑，优先使用 socks5 检测
     warp_active = os.system("/usr/bin/systemctl is-active --quiet warp-svc") == 0
     if warp_active:
-        # 优先尝试 cli status
-        warp_res = subprocess.getoutput("warp-cli status 2>/dev/null")
-        if "Connected" in warp_res:
+        # 优先检查 socks5 出口能否通 ipv4（更可靠）
+        check_cmd = "curl -s --socks5 127.0.0.1:40000 https://api.ipify.org --connect-timeout 2"
+        if os.system(check_cmd + " > /dev/null 2>&1") == 0:
             health["warp"] = "OK"
         else:
-            # 备选方案：检查 socks5 出口能否通 ipv4
-            check_cmd = "curl -s --socks5 127.0.0.1:40000 https://api.ipify.org --connect-timeout 2"
-            health["warp"] = "OK" if os.system(check_cmd + " > /dev/null") == 0 else "FAIL"
+            # 备选方案：尝试 cli status
+            warp_res = subprocess.getoutput("warp-cli status 2>/dev/null")
+            health["warp"] = "OK" if "Connected" in warp_res else "FAIL"
     elif os.system("command -v warp-cli > /dev/null") == 0:
         health["warp"] = "FAIL"
+    else:
+        # 没有安装 WARP
+        health["warp"] = "SKIP"
     return health
 
 def get_status_data(tid=None, res=None):
