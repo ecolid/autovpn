@@ -1236,10 +1236,16 @@ optimize_system() {
     else
         local mem_total=$(free -m | awk '/^Mem:/{print $2}')
         if [ "$mem_total" -le 1024 ]; then
-            echo -e "\n${YELLOW}【重要】风险提示：开启 Swap 虚拟内存${PLAIN}"
-            echo -e "说明：检测到你的内存小于 1GB。开启 Swap 可以防止因内存溢出导致的进程（如 Xray）崩溃。"
-            echo -e "影响：将占用 2GB 硬盘空间。风险：对于磁盘 IO 极差的服务器，频繁交换可能导致系统卡顿。"
-            read -p "是否创建 2GB Swap？ [Y/n]: " swap_choice
+            if [[ "$MODE" == "silent" ]]; then
+                # 静默模式自动配置 Swap
+                log_info "静默模式：检测到内存小于 1GB，自动配置 Swap..."
+                swap_choice="y"
+            else
+                echo -e "\n${YELLOW}【重要】风险提示：开启 Swap 虚拟内存${PLAIN}"
+                echo -e "说明：检测到你的内存小于 1GB。开启 Swap 可以防止因内存溢出导致的进程（如 Xray）崩溃。"
+                echo -e "影响：将占用 2GB 硬盘空间。风险：对于磁盘 IO 极差的服务器，频繁交换可能导致系统卡顿。"
+                read -p "是否创建 2GB Swap？ [Y/n]: " swap_choice
+            fi
             if [[ ! "$swap_choice" =~ ^[Nn]$ ]]; then
                 log_info "正在创建 2GB Swap..."
                 fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
