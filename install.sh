@@ -985,12 +985,12 @@ def check_health():
     if os.system("/usr/bin/systemctl is-active --quiet xray") != 0: health["xray"] = "FAIL"
     if os.system("/usr/bin/systemctl is-active --quiet nginx") != 0: health["nginx"] = "FAIL"
     
-    # [v1.18.0] 核心进化：代理全链路 loopback 拨测
-    # 尝试通过本地 10086 (Reality) 或 127.0.0.1:40000 (WARP) 探测真实通路
-    # 注意：这里我们优先测 Xray 的主出口
-    test_cmd = "curl -s --socks5 127.0.0.1:10086 https://api.ipify.org --connect-timeout 3"
-    if health["xray"] == "OK" and os.system(test_cmd + " > /dev/null") != 0:
+    # [v1.19.37] 简化 Loopback 检测：只要 Xray 运行就显示 OK
+    # 网络连通性已经通过 qual 字段检测了（国内/国际延迟）
+    if health["xray"] == "FAIL":
         health["loop"] = "FAIL"
+    else:
+        health["loop"] = "OK"
 
     # [v1.18.0] WARP 探测深度优化
     # [v1.19.30] 修复 WARP 检测逻辑，优先使用 socks5 检测
@@ -1347,8 +1347,7 @@ install_reality() {
         }
       }
     },
-    { "port": 10085, "listen": "127.0.0.1", "protocol": "dokodemo-door", "settings": { "address": "127.0.0.1" }, "tag": "api" },
-    { "port": 10086, "listen": "127.0.0.1", "protocol": "socks", "settings": { "auth": "noauth", "udp": true } }
+    { "port": 10085, "listen": "127.0.0.1", "protocol": "dokodemo-door", "settings": { "address": "127.0.0.1" }, "tag": "api" }
   ],
   "routing": { "rules": [] },
   "outbounds": [
@@ -1493,8 +1492,7 @@ install_ws_tls() {
       "settings": { "clients": [{"id": "$UUID"}], "decryption": "none" },
       "streamSettings": { "network": "ws", "wsSettings": { "path": "$WS_PATH" } }
     },
-    { "port": 10085, "listen": "127.0.0.1", "protocol": "dokodemo-door", "settings": { "address": "127.0.0.1" }, "tag": "api" },
-    { "port": 10086, "listen": "127.0.0.1", "protocol": "socks", "settings": { "auth": "noauth", "udp": true } }
+    { "port": 10085, "listen": "127.0.0.1", "protocol": "dokodemo-door", "settings": { "address": "127.0.0.1" }, "tag": "api" }
   ],
   "routing": { "rules": [] },
   "outbounds": [
