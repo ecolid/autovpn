@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.59";
+const VERSION = "v1.19.60";
 
 export default {
     async fetch(request, env) {
@@ -205,7 +205,6 @@ export default {
             }
 
             const healthStr = JSON.stringify(data.h || {});
-            const trafficStr = JSON.stringify(data.traff || { up: 0, down: 0 });
             const qualityStr = JSON.stringify(data.qual || {});
             const isSelected = node ? node.is_selected : 0;
             // 确保 IP 字段有值，防止 null
@@ -213,12 +212,24 @@ export default {
             
             // [v1.19.34] 计算增量流量
             let lastTraffic = { up: 0, down: 0 };
+            let totalTraffic = { up: 0, down: 0 };
             try {
-                if (node && node.last_traffic) {
-                    if (typeof node.last_traffic === 'string') {
-                        lastTraffic = JSON.parse(node.last_traffic);
-                    } else if (typeof node.last_traffic === 'object') {
-                        lastTraffic = node.last_traffic;
+                if (node) {
+                    // 读取上次的流量快照
+                    if (node.last_traffic) {
+                        if (typeof node.last_traffic === 'string') {
+                            lastTraffic = JSON.parse(node.last_traffic);
+                        } else if (typeof node.last_traffic === 'object') {
+                            lastTraffic = node.last_traffic;
+                        }
+                    }
+                    // 读取总流量
+                    if (node.traffic_total) {
+                        if (typeof node.traffic_total === 'string') {
+                            totalTraffic = JSON.parse(node.traffic_total);
+                        } else if (typeof node.traffic_total === 'object') {
+                            totalTraffic = node.traffic_total;
+                        }
                     }
                 }
             } catch (e) {}
@@ -228,6 +239,10 @@ export default {
             const deltaUp = Math.max(0, currentUp - (lastTraffic.up || 0));
             const deltaDown = Math.max(0, currentDown - (lastTraffic.down || 0));
             
+            // 累加总流量
+            const newTotalUp = (totalTraffic.up || 0) + deltaUp;
+            const newTotalDown = (totalTraffic.down || 0) + deltaDown;
+            const totalTrafficStr = JSON.stringify({ up: newTotalUp, down: newTotalDown });
             const lastTrafficStr = JSON.stringify({ up: currentUp, down: currentDown });
 
             try {
@@ -240,7 +255,7 @@ export default {
                     traffic_total=EXCLUDED.traffic_total, quality=EXCLUDED.quality, last_traffic=EXCLUDED.last_traffic,
                     ip=CASE WHEN EXCLUDED.ip IS NOT NULL AND EXCLUDED.ip != '' THEN EXCLUDED.ip ELSE nodes.ip END,
                     alert_sent=0
-                `).bind(data.id, data.hostname || data.id, data.cpu, data.mem_pct || 0, data.v, now, healthStr, trafficStr, qualityStr, nodeIp, isSelected, lastTrafficStr).run();
+                `).bind(data.id, data.hostname || data.id, data.cpu, data.mem_pct || 0, data.v, now, healthStr, totalTrafficStr, qualityStr, nodeIp, isSelected, lastTrafficStr).run();
             } catch (e) {
                 // [v1.19.16] 记录数据库错误
                 console.error(`[ERROR] 节点 ${data.id} 汇报失败：${e.message}`);
