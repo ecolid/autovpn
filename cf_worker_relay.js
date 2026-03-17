@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.20.3";
+const VERSION = "v1.20.4";
 
 // [v1.20.0] 集中 schema 迁移，所有 CREATE TABLE / ALTER TABLE 在这里
 async function ensureSchema(env) {
