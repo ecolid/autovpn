@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.53";
+const VERSION = "v1.19.54";
 
 export default {
     async fetch(request, env) {
@@ -658,17 +658,21 @@ ${nodeCards || "  暂无节点"}
             GROUP BY node_id
         `).bind(startTime).all();
         
-        let res = `⏰ <b>最近 24 小时流量统计</b>\n\n`;
+        let res = `⏰ <b>最近 24 小时流量统计</b>
+
+<pre>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`;
         if (stats.results && stats.results.length > 0) {
             for (const s of stats.results) {
                 const upGB = ((s.total_up || 0) / (1024**3)).toFixed(2);
                 const downGB = ((s.total_down || 0) / (1024**3)).toFixed(2);
-                res += `🌩️ ${s.node_id}\n`;
-                res += `   🔼 ${upGB}GB | 🔽 ${downGB}GB\n\n`;
+                res += `  🌩️ ${s.node_id}\n`;
+                res += `    🔼 ${upGB}GB | 🔽 ${downGB}GB\n`;
             }
         } else {
-            res += `暂无数据\n\n`;
+            res += `  暂无数据\n`;
         }
+        res += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</pre>`;
         
         const btns = [[{ text: "🔙 返回", callback_data: "show_traffic_stats" }]];
         await sendTelegram(BOT_TOKEN, CHAT_ID, res, { inline_keyboard: btns });
@@ -689,17 +693,21 @@ ${nodeCards || "  暂无节点"}
             GROUP BY node_id
         `).bind(startTime).all();
         
-        let res = `📅 <b>最近 30 天流量统计</b>\n\n`;
+        let res = `📅 <b>最近 30 天流量统计</b>
+
+<pre>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`;
         if (stats.results && stats.results.length > 0) {
             for (const s of stats.results) {
                 const upGB = ((s.total_up || 0) / (1024**3)).toFixed(2);
                 const downGB = ((s.total_down || 0) / (1024**3)).toFixed(2);
-                res += `🌩️ ${s.node_id}\n`;
-                res += `   🔼 ${upGB}GB | 🔽 ${downGB}GB\n\n`;
+                res += `  🌩️ ${s.node_id}\n`;
+                res += `    🔼 ${upGB}GB | 🔽 ${downGB}GB\n`;
             }
         } else {
-            res += `暂无数据\n\n`;
+            res += `  暂无数据\n`;
         }
+        res += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</pre>`;
         
         const btns = [[{ text: "🔙 返回", callback_data: "show_traffic_stats" }]];
         await sendTelegram(BOT_TOKEN, CHAT_ID, res, { inline_keyboard: btns });
@@ -720,17 +728,21 @@ ${nodeCards || "  暂无节点"}
             GROUP BY node_id
         `).bind(startTime).all();
         
-        let res = `📆 <b>最近 12 个月流量统计</b>\n\n`;
+        let res = `📆 <b>最近 12 个月流量统计</b>
+
+<pre>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`;
         if (stats.results && stats.results.length > 0) {
             for (const s of stats.results) {
                 const upGB = ((s.total_up || 0) / (1024**3)).toFixed(2);
                 const downGB = ((s.total_down || 0) / (1024**3)).toFixed(2);
-                res += `🌩️ ${s.node_id}\n`;
-                res += `   🔼 ${upGB}GB | 🔽 ${downGB}GB\n\n`;
+                res += `  🌩️ ${s.node_id}\n`;
+                res += `    🔼 ${upGB}GB | 🔽 ${downGB}GB\n`;
             }
         } else {
-            res += `暂无数据\n\n`;
+            res += `  暂无数据\n`;
         }
+        res += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</pre>`;
         
         const btns = [[{ text: "🔙 返回", callback_data: "show_traffic_stats" }]];
         await sendTelegram(BOT_TOKEN, CHAT_ID, res, { inline_keyboard: btns });
@@ -753,18 +765,22 @@ ${nodeCards || "  暂无节点"}
             LIMIT 10
         `).bind(startTime).all();
         
-        let res = `🏆 <b>流量排行榜 (最近 30 天)</b>\n\n`;
+        let res = `🏆 <b>流量排行榜 (最近 30 天)</b>
+
+<pre>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`;
         if (stats.results && stats.results.length > 0) {
             let rank = 1;
             for (const s of stats.results) {
                 const totalGB = ((s.total || 0) / (1024**3)).toFixed(2);
                 const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : '🎖️';
-                res += `${medal} #${rank} ${s.node_id}: ${totalGB}GB\n`;
+                res += `  ${medal} #${rank} ${s.node_id}: ${totalGB}GB\n`;
                 rank++;
             }
         } else {
-            res += `暂无数据\n\n`;
+            res += `  暂无数据\n`;
         }
+        res += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</pre>`;
         
         const btns = [
             [{ text: "🔙 返回", callback_data: "show_traffic_stats" }]
