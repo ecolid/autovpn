@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.65";
+const VERSION = "v1.19.66";
 
 export default {
     async fetch(request, env) {
