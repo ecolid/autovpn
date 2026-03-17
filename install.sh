@@ -1564,8 +1564,25 @@ main() {
         
         exit 0
     fi
-    # 如果是 BOT 自动更新，则只更新本地守护进程，不重新部署 Worker
+    # 如果是 BOT 自动更新，先下载最新脚本再执行更新
     if [[ "$AUTO_UPDATE_BOT" == "1" ]]; then
+        # 检查是否已经是在最新脚本中执行（通过检查临时文件）
+        if [[ ! -f "/tmp/autovpn_updated" ]]; then
+            log_info ">>> 正在下载最新版本脚本..."
+            if curl -sL -o /tmp/install_new.sh https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh; then
+                chmod +x /tmp/install_new.sh
+                # 创建标记文件，避免无限循环
+                touch /tmp/autovpn_updated
+                log_info "✅ 已获取最新版本，正在执行更新..."
+                exec /tmp/install_new.sh --update-bot --silent
+            else
+                log_warn "⚠️ 下载最新版本失败，使用当前脚本继续更新"
+            fi
+        fi
+        
+        # 清理标记文件
+        rm -f /tmp/autovpn_updated
+        
         log_info ">>> 执行自动更新：正在更新本地守护进程..."
         # 确保关键变量已读
         if [ -f "$ENV_PATH" ]; then source "$ENV_PATH"; fi
