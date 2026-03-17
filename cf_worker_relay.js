@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.49";
+const VERSION = "v1.19.50";
 
 export default {
     async fetch(request, env) {
@@ -525,7 +525,8 @@ ${nodeCards || "暂无节点"}━━━━━━━━━━━━━━━━�
 
 ━━━━━━━━━━━━━━━━━━━━━━
 ⏰ 24 小时流量趋势
-━━━━━━━━━━━━━━━━━━━━━━`;
+━━━━━━━━━━━━━━━━━━━━━━
+`;
         
         const trendChars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
         if (nodes.results && nodes.results.length > 0) {
@@ -533,31 +534,38 @@ ${nodeCards || "暂无节点"}━━━━━━━━━━━━━━━━�
                 const cpuPct = parseFloat(node.cpu || 0);
                 const trendIndex = Math.min(Math.floor(cpuPct / 12.5), 7);
                 const trend = trendChars[trendIndex].repeat(12) + trendChars[Math.max(0, trendIndex - 1)].repeat(12);
-                statsText += `${node.hostname || node.id}:  ${trend}\n`;
+                statsText += `  ${node.hostname || node.id}:  ${trend}\n`;
             }
+        } else {
+            statsText += `  暂无数据\n`;
         }
         
         statsText += `
 ━━━━━━━━━━━━━━━━━━━━━━
 💾 系统负荷对比
-━━━━━━━━━━━━━━━━━━━━━━`;
+━━━━━━━━━━━━━━━━━━━━━━
+`;
         
         if (nodes.results && nodes.results.length > 0) {
             for (const node of nodes.results) {
                 const cpuPct = parseFloat(node.cpu || 0);
                 const memPct = parseFloat(node.mem_pct || 0);
-                statsText += `${node.hostname || node.id}:\n`;
-                statsText += `  CPU: ${genBar(cpuPct)}\n`;
-                statsText += `  内存：${genBar(memPct)}\n\n`;
+                statsText += `  ${node.hostname || node.id}:\n`;
+                statsText += `    CPU: ${genBar(cpuPct)}\n`;
+                statsText += `    内存：${genBar(memPct)}\n`;
             }
+        } else {
+            statsText += `  暂无数据\n`;
         }
         
-        statsText += `━━━━━━━━━━━━━━━━━━━━━━
+        statsText += `
+━━━━━━━━━━━━━━━━━━━━━━
 🌐 延迟对比 (ms)
-━━━━━━━━━━━━━━━━━━━━━━`;
+━━━━━━━━━━━━━━━━━━━━━━
+`;
         
         if (nodes.results && nodes.results.length > 0) {
-            statsText += `国内延迟：\n`;
+            statsText += `  国内延迟：\n`;
             for (const node of nodes.results) {
                 let q = { china: { lat: 0 }, global: { lat: 0 } };
                 try {
@@ -569,10 +577,10 @@ ${nodeCards || "暂无节点"}━━━━━━━━━━━━━━━━�
                 } catch (e) {}
                 const latIndex = Math.min(Math.floor((q.china?.lat || 0) / 5), 7);
                 const latTrend = trendChars[Math.min(latIndex, 7)].repeat(Math.max(1, latIndex + 1));
-                statsText += `  ${node.hostname || node.id}:  🇨🇳 ${latTrend} ${q.china?.lat || "--"}ms\n`;
+                statsText += `    ${node.hostname || node.id}:  🇨🇳 ${latTrend} ${q.china?.lat || "--"}ms\n`;
             }
             
-            statsText += `\n国际延迟：\n`;
+            statsText += `\n  国际延迟：\n`;
             for (const node of nodes.results) {
                 let q = { china: { lat: 0 }, global: { lat: 0 } };
                 try {
@@ -584,14 +592,17 @@ ${nodeCards || "暂无节点"}━━━━━━━━━━━━━━━━�
                 } catch (e) {}
                 const latIndex = Math.min(Math.floor((q.global?.lat || 0) / 5), 7);
                 const latTrend = trendChars[Math.min(latIndex, 7)].repeat(Math.max(1, latIndex + 1));
-                statsText += `  ${node.hostname || node.id}:  🌐 ${latTrend} ${q.global?.lat || "--"}ms\n`;
+                statsText += `    ${node.hostname || node.id}:  🌐 ${latTrend} ${q.global?.lat || "--"}ms\n`;
             }
+        } else {
+            statsText += `  暂无数据\n`;
         }
         
         statsText += `
 ━━━━━━━━━━━━━━━━━━━━━━
 📈 流量排行 (Top 5)
-━━━━━━━━━━━━━━━━━━━━━━`;
+━━━━━━━━━━━━━━━━━━━━━━
+`;
         
         const now = Math.floor(Date.now() / 1000);
         const startTime = now - 86400 * 30;
@@ -610,11 +621,11 @@ ${nodeCards || "暂无节点"}━━━━━━━━━━━━━━━━�
             for (const r of ranking.results) {
                 const totalGB = ((r.total || 0) / (1024 ** 3)).toFixed(2);
                 const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : '4️⃣';
-                statsText += `${medal} #${rank} ${r.node_id}: ${totalGB}GB\n`;
+                statsText += `  ${medal} #${rank} ${r.node_id}: ${totalGB}GB\n`;
                 rank++;
             }
         } else {
-            statsText += `暂无数据\n`;
+            statsText += `  暂无数据\n`;
         }
         
         const btns = [
