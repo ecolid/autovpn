@@ -1214,19 +1214,24 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload && systemctl enable xray && systemctl restart xray
+    log_info "✅ Xray 核心配置已更新"
+
+    # 更新 Guardian 守护进程
+    setup_guardian_bot
+    log_info "✅ Guardian 守护进程已更新"
+
     open_ports $XRAY_PORT
     save_env
-    
+
     # 结果输出
     IP=$(curl -s https://ipv4.icanhazip.com)
     LINK="vless://${UUID}@${IP}:${XRAY_PORT}?encryption=none&security=reality&sni=${FAKE_DOMAIN}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&flow=xtls-rprx-vision#AutoVPN_Reality"
-    
+
     echo -e "${GREEN}$LINK${PLAIN}"
     echo -e "=========================================================="
-    
-    # TG 通知与监控
+
+    # TG 通知
     send_tg_msg "✅ *AutoVPN Reality 部署成功!*\n\n📍 *IP:* ${IP}\n🔑 *UUID:* ${UUID}\n🔗 *链接:* \`${LINK}\`"
-    setup_guardian_bot
 }
 
 # =================================================================
@@ -1268,59 +1273,9 @@ install_ws_tls() {
         WS_PATH="${WS_PATH:-${EXISTING_PATH:-/lovelinux}}"
     fi
     log_info "正在执行自动化部署任务 (同步 DNS、申请证书、配置 Nginx)..."
-    
-    if [[ "$MODE" == "silent" ]]; then
-        decoy_choice="Y"
-    else
-        # 4. 可选伪装页面
-        echo -e "\n${BLUE}[配置 4/4] 网站伪装页面${PLAIN}"
-        echo -e "说明：AutoVPN 默认提供一个 2048 小游戏的伪装页面，访问你的域名会显示正常游戏。"
-        read -p "是否部署此伪装页面？ [Y/n]: " decoy_choice
-        decoy_choice="${decoy_choice:-Y}"
-    fi
 
-    # 环境清理
-    systemctl stop nginx || true
-    systemctl stop nginx || true
-    rm -f /etc/nginx/sites-enabled/default
-
-    # 自动 DNS 解析
-    IP=$(curl -s https://ipv4.icanhazip.com)
-    log_info "正在同步 Cloudflare DNS: $DOMAIN -> $IP"
-    
-    ZONE_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" \
-         -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" | jq -r '.result[0].id')
-    
-    if [ "$ZONE_ID" == "null" ] || [ -z "$ZONE_ID" ]; then
-        log_err "无法获取 Zone ID，请检查域名和 Token。"
-        exit 1
-    fi
-    
-    RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?name=$DOMAIN&type=A" \
-         -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" | jq -r '.result[0].id')
-    
-    if [ "$RECORD_ID" == "null" ] || [ -z "$RECORD_ID" ]; then
-        curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records" \
-             -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" \
-             --data "{\"type\":\"A\",\"name\":\"$DOMAIN\",\"content\":\"$IP\",\"ttl\":1,\"proxied\":true}" > /dev/null
-    else
-        curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$RECORD_ID" \
-             -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" \
-             --data "{\"type\":\"A\",\"name\":\"$DOMAIN\",\"content\":\"$IP\",\"ttl\":1,\"proxied\":true}" > /dev/null
-    fi
-
-    # 部署 WARP
-    manage_warp "install"
-
-    # 申请证书
-    log_info "申请 SSL 证书..."
-    if [ ! -f "$HOME/.acme.sh/acme.sh" ]; then curl https://get.acme.sh | sh; fi
-    export CF_Token="$CF_TOKEN"
-    ~/.acme.sh/acme.sh --issue --dns dns_cf -d $DOMAIN --dnssleep 10 --force
-    mkdir -p /etc/ssl/$DOMAIN
-    ~/.acme.sh/acme.sh --install-cert -d $DOMAIN --key-file /etc/ssl/$DOMAIN/privkey.pem --fullchain-file /etc/ssl/$DOMAIN/fullchain.pem --reloadcmd "systemctl reload nginx" || true
-
-    # Xray 配置
+    # [v1.20.4] 优先更新核心配置（Xray + Guardian），确保即使 DNS/SSL 失败也能更新
+    log_info "更新 Xray 核心配置..."
     mkdir -p /usr/local/etc/xray
     cat > /usr/local/etc/xray/config.json <<EOF
 {
@@ -1357,6 +1312,60 @@ Restart=on-failure
 User=root
 EOF
     systemctl daemon-reload && systemctl enable xray && systemctl restart xray
+    log_info "✅ Xray 核心配置已更新"
+
+    # 更新 Guardian 守护进程
+    setup_guardian_bot
+    log_info "✅ Guardian 守护进程已更新"
+
+    if [[ "$MODE" == "silent" ]]; then
+        decoy_choice="Y"
+    else
+        # 可选伪装页面
+        echo -e "\n${BLUE}[配置 4/4] 网站伪装页面${PLAIN}"
+        echo -e "说明：AutoVPN 默认提供一个 2048 小游戏的伪装页面，访问你的域名会显示正常游戏。"
+        read -p "是否部署此伪装页面？ [Y/n]: " decoy_choice
+        decoy_choice="${decoy_choice:-Y}"
+    fi
+
+    # 环境清理
+    systemctl stop nginx || true
+    rm -f /etc/nginx/sites-enabled/default
+
+    # 自动 DNS 解析
+    IP=$(curl -s https://ipv4.icanhazip.com)
+    log_info "正在同步 Cloudflare DNS: $DOMAIN -> $IP"
+
+    ZONE_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" \
+         -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" | jq -r '.result[0].id')
+
+    if [ "$ZONE_ID" == "null" ] || [ -z "$ZONE_ID" ]; then
+        log_err "⚠️ 无法获取 Zone ID，跳过 DNS 同步（核心配置已更新）"
+    else
+        RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?name=$DOMAIN&type=A" \
+             -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" | jq -r '.result[0].id')
+
+        if [ "$RECORD_ID" == "null" ] || [ -z "$RECORD_ID" ]; then
+            curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records" \
+                 -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" \
+                 --data "{\"type\":\"A\",\"name\":\"$DOMAIN\",\"content\":\"$IP\",\"ttl\":1,\"proxied\":true}" > /dev/null
+        else
+            curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$RECORD_ID" \
+                 -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" \
+                 --data "{\"type\":\"A\",\"name\":\"$DOMAIN\",\"content\":\"$IP\",\"ttl\":1,\"proxied\":true}" > /dev/null
+        fi
+    fi
+
+    # 部署 WARP
+    manage_warp "install"
+
+    # 申请/续签证书
+    log_info "检查 SSL 证书..."
+    if [ ! -f "$HOME/.acme.sh/acme.sh" ]; then curl https://get.acme.sh | sh; fi
+    export CF_Token="$CF_TOKEN"
+    ~/.acme.sh/acme.sh --issue --dns dns_cf -d $DOMAIN --dnssleep 10 --force || true
+    mkdir -p /etc/ssl/$DOMAIN
+    ~/.acme.sh/acme.sh --install-cert -d $DOMAIN --key-file /etc/ssl/$DOMAIN/privkey.pem --fullchain-file /etc/ssl/$DOMAIN/fullchain.pem --reloadcmd "systemctl reload nginx" || true
 
     # Nginx + 2048 伪装
     log_info "配置 Nginx 伪装页..."
@@ -1389,9 +1398,8 @@ EOF
     echo -e "${GREEN}$LINK${PLAIN}"
     echo -e "=========================================================="
 
-    # TG 通知与监控
+    # TG 通知
     send_tg_msg "✅ *AutoVPN WS-TLS 部署成功!*\n\n📍 *域名:* ${DOMAIN}\n🔑 *UUID:* ${UUID}\n🔗 *链接:* \`${LINK}\`"
-    setup_guardian_bot
 }
 
 # =================================================================
