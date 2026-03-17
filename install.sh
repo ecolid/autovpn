@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.20.1"
+VERSION="v1.20.2"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -785,7 +785,7 @@ setup_guardian_bot() {
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, statistics, sys, socket
 
-VERSION = "1.20.1"
+VERSION = "1.20.2"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 
 # [v1.18.46] 优先从 .env 读取 NODE_ID（配对模式），否则使用 hostname
