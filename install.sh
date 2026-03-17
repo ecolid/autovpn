@@ -809,27 +809,46 @@ def run_shell(cmd):
 def get_traffic():
     """
     获取 Xray 流量统计数据
-    优先使用 Xray API，如果 API 不可用则返回空数据
+    使用多种方法尝试获取，优先使用 API，失败时返回空数据
     """
     try:
-        # 尝试使用 Xray API 获取流量数据
-        res = subprocess.getoutput("/usr/local/bin/xray api statsquery --server=127.0.0.1:10085")
-        if res and "value" in res:
+        # 方法 1: 尝试使用 Xray API
+        res = subprocess.getoutput("/usr/local/bin/xray api statsquery --server=127.0.0.1:10085 2>&1")
+        if res and "value" in res and "failed" not in res.lower():
             up, down = 0, 0
             for line in res.split("\n"):
                 if "uplink" in line and "value" in line:
                     try:
-                        up += int(line.split(":")[-1].strip())
+                        val = int(line.split(":")[-1].strip())
+                        if val > 0: up += val
                     except: pass
                 if "downlink" in line and "value" in line:
                     try:
-                        down += int(line.split(":")[-1].strip())
+                        val = int(line.split(":")[-1].strip())
+                        if val > 0: down += val
+                    except: pass
+            if up > 0 or down > 0:
+                return {"up": up, "down": down}
+        
+        # 方法 2: 尝试使用 stats 命令
+        res = subprocess.getoutput("/usr/local/bin/xray api stats --server=127.0.0.1:10085 -name 'user' 2>&1")
+        if res and "value" in res and "failed" not in res.lower():
+            up, down = 0, 0
+            for line in res.split("\n"):
+                if "uplink" in line and "value" in line:
+                    try:
+                        val = int(line.split(":")[-1].strip())
+                        if val > 0: up += val
+                    except: pass
+                if "downlink" in line and "value" in line:
+                    try:
+                        val = int(line.split(":")[-1].strip())
+                        if val > 0: down += val
                     except: pass
             if up > 0 or down > 0:
                 return {"up": up, "down": down}
         
         # API 不可用时，返回空数据
-        # 这样可以避免上报错误的流量数据
         return {"up": 0, "down": 0}
     except:
         return {"up": 0, "down": 0}
