@@ -1569,7 +1569,7 @@ main() {
         log_info ">>> 执行自动更新：正在更新本地守护进程..."
         # 确保关键变量已读
         if [ -f "$ENV_PATH" ]; then source "$ENV_PATH"; fi
-        setup_guardian_bot
+        setup_guardian_bot "silent"
         exit 0
     fi
     # 如果是静默模式，根据 INSTALL_MODE 自动执行
