@@ -949,7 +949,8 @@ EOF
     local target_script="/usr/local/etc/autovpn/install.sh"
     
     # [v1.18.51] 配对模式下，install.sh 已在主流程更新，此处不再重复拉取
-    if [[ "$MODE" != "silent" ]]; then
+    # [v1.19.65] 修复：无论是否静默模式，都必须确保 install.sh 和软链接存在
+    if [[ ! -f "$target_script" || "$MODE" != "silent" ]]; then
         # [v1.18.0] 修复 piped execution (curl | bash) 导致 $0 指向 bash 的问题
         if [[ -f "$0" && ! "$0" == *"bash"* ]]; then
             cp "$(readlink -f "$0")" "$target_script"
@@ -957,8 +958,10 @@ EOF
             wget -qO "$target_script" https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh
         fi
         chmod +x "$target_script"
-        ln -sf "$target_script" /usr/local/bin/autovpn
     fi
+    
+    # 确保软链接始终存在
+    ln -sf "$target_script" /usr/local/bin/autovpn
     
     systemctl daemon-reload
     
