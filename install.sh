@@ -25,7 +25,7 @@ while [[ $# -gt 0 ]]; do
         --update-bot)
             ENV_PATH="/usr/local/etc/autovpn/.env"
             if [ -f "$ENV_PATH" ]; then source "$ENV_PATH"; fi
-            AUTO_UPDATE_BOT=1; shift ;;
+            AUTO_UPDATE_BOT=1; MODE="silent"; shift ;;
         start|stop|restart|log|speed) CMD_ACTION="$1"; shift ;;
         --cf-worker-url) CF_WORKER_URL="$2"; shift 2 ;;
         --cluster-token) CLUSTER_TOKEN="$2"; shift 2 ;;
@@ -697,7 +697,7 @@ setup_guardian_bot() {
     log_info "[DEBUG] setup_guardian_bot 被调用，mode='$mode', NODE_ID='$NODE_ID'"
     log_info "正在配置 AutoVPN Guardian 集群服务..."
     
-    # [v1.18.63] 检查 .env 文件是否存在且包含 NODE_ID
+    # [v1.18.63] 检查 .env 文件，NODE_ID 有容错处理
     if [[ ! -f "$ENV_PATH" ]]; then
         log_err "❌ .env 文件不存在，无法配置 Guardian！"
         return 1
@@ -705,12 +705,14 @@ setup_guardian_bot() {
     
     local env_node_id=$(grep "^NODE_ID=" "$ENV_PATH" 2>/dev/null | cut -d'=' -f2 | tr -d '"')
     if [[ -z "$env_node_id" ]]; then
-        log_err "❌ .env 文件中 NODE_ID 为空，无法配置 Guardian！"
-        log_info "当前 NODE_ID 变量：'$NODE_ID'"
-        return 1
+        log_warn "⚠️ .env 文件中 NODE_ID 为空，将使用主机名作为节点 ID"
+        env_node_id=$(hostname)
+        # 更新 .env 文件添加 NODE_ID
+        echo "NODE_ID=\"$env_node_id\"" >> "$ENV_PATH"
+        log_info "已自动设置 NODE_ID 为：$env_node_id"
     fi
     
-    log_info "[DEBUG] .env 中的 NODE_ID: '$env_node_id'"
+    log_info "[DEBUG] 使用的 NODE_ID: '$env_node_id'"
     
     # 基础环境检查（静默模式也必须执行）
     if ! command -v python3 &> /dev/null; then
@@ -1562,13 +1564,12 @@ main() {
         
         exit 0
     fi
-    # 如果是 BOT 自动更新，则跳备菜单
+    # 如果是 BOT 自动更新，则只更新本地守护进程，不重新部署 Worker
     if [[ "$AUTO_UPDATE_BOT" == "1" ]]; then
-        log_info ">>> 执行云端同步：正在更新守护进程与云端中继..."
+        log_info ">>> 执行自动更新：正在更新本地守护进程..."
         # 确保关键变量已读
         if [ -f "$ENV_PATH" ]; then source "$ENV_PATH"; fi
         setup_guardian_bot
-        deploy_cf_worker
         exit 0
     fi
     # 如果是静默模式，根据 INSTALL_MODE 自动执行
