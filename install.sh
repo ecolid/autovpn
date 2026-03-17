@@ -809,46 +809,36 @@ def run_shell(cmd):
 def get_traffic():
     """
     获取 Xray 流量统计数据
-    使用多种方法尝试获取，优先使用 API，失败时返回空数据
+    方法：分析 Xray 访问日志获取流量
     """
     try:
-        # 方法 1: 尝试使用 Xray API
-        res = subprocess.getoutput("/usr/local/bin/xray api statsquery --server=127.0.0.1:10085 2>&1")
-        if res and "value" in res and "failed" not in res.lower():
-            up, down = 0, 0
-            for line in res.split("\n"):
-                if "uplink" in line and "value" in line:
-                    try:
-                        val = int(line.split(":")[-1].strip())
-                        if val > 0: up += val
-                    except: pass
-                if "downlink" in line and "value" in line:
-                    try:
-                        val = int(line.split(":")[-1].strip())
-                        if val > 0: down += val
-                    except: pass
-            if up > 0 or down > 0:
-                return {"up": up, "down": down}
+        # 尝试读取 Xray 访问日志
+        log_path = "/var/log/xray/access.log"
+        if os.path.exists(log_path):
+            # 读取日志最后 1000 行
+            res = subprocess.getoutput(f"tail -1000 {log_path}")
+            if res:
+                # 简单统计流量（根据日志中的字节数）
+                lines = res.split("\n")
+                total_bytes = 0
+                for line in lines:
+                    # Xray 日志格式：timestamp [protocol] info: bytes_sent bytes_received
+                    parts = line.split()
+                    if len(parts) >= 6:
+                        try:
+                            # 尝试提取字节数（最后两个字段）
+                            sent = int(parts[-2])
+                            recv = int(parts[-1])
+                            if sent > 0 or recv > 0:
+                                total_bytes += sent + recv
+                        except:
+                            pass
+                
+                # 转换为字节累计（估算值）
+                if total_bytes > 0:
+                    return {"up": total_bytes // 2, "down": total_bytes // 2}
         
-        # 方法 2: 尝试使用 stats 命令
-        res = subprocess.getoutput("/usr/local/bin/xray api stats --server=127.0.0.1:10085 -name 'user' 2>&1")
-        if res and "value" in res and "failed" not in res.lower():
-            up, down = 0, 0
-            for line in res.split("\n"):
-                if "uplink" in line and "value" in line:
-                    try:
-                        val = int(line.split(":")[-1].strip())
-                        if val > 0: up += val
-                    except: pass
-                if "downlink" in line and "value" in line:
-                    try:
-                        val = int(line.split(":")[-1].strip())
-                        if val > 0: down += val
-                    except: pass
-            if up > 0 or down > 0:
-                return {"up": up, "down": down}
-        
-        # API 不可用时，返回空数据
+        # 日志不可用时，返回空数据
         return {"up": 0, "down": 0}
     except:
         return {"up": 0, "down": 0}
