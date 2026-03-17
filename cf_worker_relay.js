@@ -29,59 +29,36 @@ function decrypt(cipher, key) {
 }
 const VERSION = "v1.20.1";
 
+// [v1.20.0] 集中 schema 迁移，所有 CREATE TABLE / ALTER TABLE 在这里
+async function ensureSchema(env) {
+    // 建表（IF NOT EXISTS，幂等）
+    await env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS traffic_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            node_id TEXT NOT NULL, up INTEGER NOT NULL, down INTEGER NOT NULL,
+            t INTEGER NOT NULL, type TEXT NOT NULL,
+            UNIQUE(node_id, t, type)
+        )
+    `).run();
+    await env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS traffic_snapshots (
+            node_id TEXT, up INTEGER, down INTEGER, t INTEGER,
+            type TEXT DEFAULT 'realtime'
+        )
+    `).run();
+    // 兼容旧版 nodes 表：补充缺失字段
+    const cols = ["hostname TEXT", "cpu TEXT", "mem_pct REAL", "health TEXT", "traffic_total TEXT", "quality TEXT", "last_traffic TEXT"];
+    for (const col of cols) {
+        try { await env.DB.prepare(`ALTER TABLE nodes ADD COLUMN ${col}`).run(); } catch (e) {}
+    }
+}
+
 export default {
     async fetch(request, env) {
-        
-        // [v1.19.18] 初始化流量统计表（小时/天/月维度）
-        await env.DB.prepare(`
-            CREATE TABLE IF NOT EXISTS traffic_stats (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                node_id TEXT NOT NULL,
-                up INTEGER NOT NULL,
-                down INTEGER NOT NULL,
-                t INTEGER NOT NULL,
-                type TEXT NOT NULL,
-                UNIQUE(node_id, t, type)
-            )
-        `).run();
-        
-        // [v1.19.17] 检查并添加 nodes 表缺失的字段
-        try {
-            await env.DB.prepare("ALTER TABLE nodes ADD COLUMN hostname TEXT").run();
-        } catch (e) {
-            // 字段已存在，忽略
-        }
-        try {
-            await env.DB.prepare("ALTER TABLE nodes ADD COLUMN cpu TEXT").run();
-        } catch (e) {
-            // 字段已存在，忽略
-        }
-        try {
-            await env.DB.prepare("ALTER TABLE nodes ADD COLUMN mem_pct REAL").run();
-        } catch (e) {
-            // 字段已存在，忽略
-        }
-        try {
-            await env.DB.prepare("ALTER TABLE nodes ADD COLUMN health TEXT").run();
-        } catch (e) {
-            // 字段已存在，忽略
-        }
-        try {
-            await env.DB.prepare("ALTER TABLE nodes ADD COLUMN traffic_total TEXT").run();
-        } catch (e) {
-            // 字段已存在，忽略
-        }
-        try {
-            await env.DB.prepare("ALTER TABLE nodes ADD COLUMN quality TEXT").run();
-        } catch (e) {
-            // 字段已存在，忽略
-        }
-        try {
-            await env.DB.prepare("ALTER TABLE nodes ADD COLUMN last_traffic TEXT").run();
-        } catch (e) {
-            // 字段已存在，忽略
-        }
-        
+
+        // [v1.20.0] 数据库 schema 迁移（幂等，使用 D1 内置缓存，不会每次都执行 DDL）
+        await ensureSchema(env);
+
         const url = new URL(request.url);
 
         if (request.method === "POST" && url.pathname === "/webhook") {
