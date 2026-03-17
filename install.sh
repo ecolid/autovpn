@@ -807,14 +807,32 @@ def run_shell(cmd):
     except: return ""
 
 def get_traffic():
+    """
+    获取 Xray 流量统计数据
+    优先使用 Xray API，如果 API 不可用则返回空数据
+    """
     try:
+        # 尝试使用 Xray API 获取流量数据
         res = subprocess.getoutput("/usr/local/bin/xray api statsquery --server=127.0.0.1:10085")
-        up, down = 0, 0
-        for line in res.split("\n"):
-            if "uplink" in line and "value" in line: up += int(line.split(":")[-1].strip())
-            if "downlink" in line and "value" in line: down += int(line.split(":")[-1].strip())
-        return {"up": up, "down": down}
-    except: return {"up": 0, "down": 0}
+        if res and "value" in res:
+            up, down = 0, 0
+            for line in res.split("\n"):
+                if "uplink" in line and "value" in line:
+                    try:
+                        up += int(line.split(":")[-1].strip())
+                    except: pass
+                if "downlink" in line and "value" in line:
+                    try:
+                        down += int(line.split(":")[-1].strip())
+                    except: pass
+            if up > 0 or down > 0:
+                return {"up": up, "down": down}
+        
+        # API 不可用时，返回空数据
+        # 这样可以避免上报错误的流量数据
+        return {"up": 0, "down": 0}
+    except:
+        return {"up": 0, "down": 0}
 
 def measure_quality(target):
     try:
