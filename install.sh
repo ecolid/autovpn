@@ -1182,7 +1182,7 @@ install_reality() {
   },
   "inbounds": [
     {
-      "port": $XRAY_PORT, "protocol": "vless",
+      "port": $XRAY_PORT, "protocol": "vless", "tag": "proxy",
       "settings": { "clients": [{ "id": "$UUID", "flow": "xtls-rprx-vision" }], "decryption": "none" },
       "streamSettings": {
         "network": "tcp", "security": "reality",
@@ -1333,7 +1333,7 @@ install_ws_tls() {
   },
   "inbounds": [
     {
-      "port": $XRAY_LISTEN_PORT, "listen": "127.0.0.1", "protocol": "vless",
+      "port": $XRAY_LISTEN_PORT, "listen": "127.0.0.1", "protocol": "vless", "tag": "proxy",
       "settings": { "clients": [{"id": "$UUID"}], "decryption": "none" },
       "streamSettings": { "network": "ws", "wsSettings": { "path": "$WS_PATH" } }
     },
