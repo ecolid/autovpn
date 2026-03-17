@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.19.59"
+VERSION="v1.20.0"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -784,7 +784,7 @@ setup_guardian_bot() {
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, statistics, sys, socket
 
-VERSION = "1.19.0"
+VERSION = "1.20.0"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 
 # [v1.18.46] 优先从 .env 读取 NODE_ID（配对模式），否则使用 hostname
@@ -810,25 +810,31 @@ def get_traffic():
     """
     获取 Xray 流量统计数据
     使用 Xray API 的 statsquery 命令
+    输出格式为 protobuf 文本：name 和 value 在不同行
     """
     try:
         res = subprocess.getoutput("/usr/local/bin/xray api statsquery --server=127.0.0.1:10085 2>&1")
         up, down = 0, 0
-        for line in res.split("\n"):
-            if "uplink" in line and "value" in line:
+        lines = res.split("\n")
+        current_dir = None
+        for line in lines:
+            stripped = line.strip()
+            if "name:" in stripped:
+                if "uplink" in stripped:
+                    current_dir = "up"
+                elif "downlink" in stripped:
+                    current_dir = "down"
+                else:
+                    current_dir = None
+            elif "value:" in stripped and current_dir:
                 try:
-                    val = int(line.split(":")[-1].strip())
-                    if val > 0: up += val
+                    val = int(stripped.split(":")[-1].strip())
+                    if val > 0:
+                        if current_dir == "up": up += val
+                        else: down += val
                 except: pass
-            if "downlink" in line and "value" in line:
-                try:
-                    val = int(line.split(":")[-1].strip())
-                    if val > 0: down += val
-                except: pass
-        if up > 0 or down > 0:
-            return {"up": up, "down": down}
-        
-        return {"up": 0, "down": 0}
+                current_dir = None
+        return {"up": up, "down": down}
     except:
         return {"up": 0, "down": 0}
 
@@ -1187,9 +1193,10 @@ install_reality() {
     },
     { "port": 10085, "listen": "127.0.0.1", "protocol": "dokodemo-door", "settings": { "address": "127.0.0.1" }, "tag": "api" }
   ],
-  "routing": { "rules": [] },
+  "routing": { "rules": [{ "inboundTag": ["api"], "outboundTag": "api_out", "type": "field" }] },
   "outbounds": [
-    { "protocol": "freedom", "tag": "direct" }
+    { "protocol": "freedom", "tag": "direct" },
+    { "protocol": "blackhole", "tag": "api_out" }
   ]
 }
 EOF
@@ -1332,10 +1339,11 @@ install_ws_tls() {
     },
     { "port": 10085, "listen": "127.0.0.1", "protocol": "dokodemo-door", "settings": { "address": "127.0.0.1" }, "tag": "api" }
   ],
-  "routing": { "rules": [] },
+  "routing": { "rules": [{ "inboundTag": ["api"], "outboundTag": "api_out", "type": "field" }] },
   "outbounds": [
     { "tag": "warp", "protocol": "socks", "settings": { "servers": [{"address": "127.0.0.1", "port": 40000}] } },
-    { "tag": "direct", "protocol": "freedom" }
+    { "tag": "direct", "protocol": "freedom" },
+    { "tag": "api_out", "protocol": "blackhole" }
   ]
 }
 EOF

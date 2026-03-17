@@ -27,7 +27,7 @@ function decrypt(cipher, key) {
         return null;
     }
 }
-const VERSION = "v1.19.66";
+const VERSION = "v1.20.1";
 
 export default {
     async fetch(request, env) {
@@ -148,7 +148,7 @@ export default {
             const data = await request.json();
             const now = Math.floor(Date.now() / 1000);
 
-            const node = await env.DB.prepare("SELECT state, is_selected, last_traffic FROM nodes WHERE id = ?").bind(data.id).first();
+            const node = await env.DB.prepare("SELECT state, is_selected, last_traffic, traffic_total FROM nodes WHERE id = ?").bind(data.id).first();
             
             // [v1.18.64] 如果是 pending 状态的节点第一次汇报，发送上线通知
             if (node && node.state === 'pending' && data.ip && data.ip !== '0.0.0.0' && data.cpu) {
