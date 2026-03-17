@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.20.2"
+VERSION="v1.20.3"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -785,7 +785,7 @@ setup_guardian_bot() {
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, statistics, sys, socket
 
-VERSION = "1.20.2"
+VERSION = "1.20.3"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 
 # [v1.18.46] 优先从 .env 读取 NODE_ID（配对模式），否则使用 hostname
@@ -1194,10 +1194,9 @@ install_reality() {
     },
     { "port": 10085, "listen": "127.0.0.1", "protocol": "dokodemo-door", "settings": { "address": "127.0.0.1" }, "tag": "api" }
   ],
-  "routing": { "rules": [{ "inboundTag": ["api"], "outboundTag": "api_out", "type": "field" }] },
+  "routing": { "rules": [{ "inboundTag": ["api"], "outboundTag": "api", "type": "field" }] },
   "outbounds": [
-    { "protocol": "freedom", "tag": "direct" },
-    { "protocol": "blackhole", "tag": "api_out" }
+    { "protocol": "freedom", "tag": "direct" }
   ]
 }
 EOF
@@ -1340,11 +1339,10 @@ install_ws_tls() {
     },
     { "port": 10085, "listen": "127.0.0.1", "protocol": "dokodemo-door", "settings": { "address": "127.0.0.1" }, "tag": "api" }
   ],
-  "routing": { "rules": [{ "inboundTag": ["api"], "outboundTag": "api_out", "type": "field" }] },
+  "routing": { "rules": [{ "inboundTag": ["api"], "outboundTag": "api", "type": "field" }] },
   "outbounds": [
     { "tag": "warp", "protocol": "socks", "settings": { "servers": [{"address": "127.0.0.1", "port": 40000}] } },
-    { "tag": "direct", "protocol": "freedom" },
-    { "tag": "api_out", "protocol": "blackhole" }
+    { "tag": "direct", "protocol": "freedom" }
   ]
 }
 EOF
