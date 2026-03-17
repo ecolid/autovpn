@@ -809,44 +809,24 @@ def run_shell(cmd):
 def get_traffic():
     """
     获取 Xray 流量统计数据
-    使用 Xray API 的 statsquery 命令，添加 Pattern 参数兼容新版本
+    使用 Xray API 的 statsquery 命令
     """
     try:
-        # 使用 statsquery 命令，添加 Pattern 参数匹配用户流量
-        res = subprocess.getoutput("/usr/local/bin/xray api statsquery --server=127.0.0.1:10085 -pattern 'user>>>' 2>&1")
-        if res and "value" in res and "failed" not in res.lower():
-            up, down = 0, 0
-            for line in res.split("\n"):
-                if "uplink" in line and "value" in line:
-                    try:
-                        val = int(line.split(":")[-1].strip())
-                        if val > 0: up += val
-                    except: pass
-                if "downlink" in line and "value" in line:
-                    try:
-                        val = int(line.split(":")[-1].strip())
-                        if val > 0: down += val
-                    except: pass
-            if up > 0 or down > 0:
-                return {"up": up, "down": down}
-        
-        # 如果带 pattern 失败，尝试不带 pattern
         res = subprocess.getoutput("/usr/local/bin/xray api statsquery --server=127.0.0.1:10085 2>&1")
-        if res and "value" in res and "failed" not in res.lower():
-            up, down = 0, 0
-            for line in res.split("\n"):
-                if "uplink" in line and "value" in line:
-                    try:
-                        val = int(line.split(":")[-1].strip())
-                        if val > 0: up += val
-                    except: pass
-                if "downlink" in line and "value" in line:
-                    try:
-                        val = int(line.split(":")[-1].strip())
-                        if val > 0: down += val
-                    except: pass
-            if up > 0 or down > 0:
-                return {"up": up, "down": down}
+        up, down = 0, 0
+        for line in res.split("\n"):
+            if "uplink" in line and "value" in line:
+                try:
+                    val = int(line.split(":")[-1].strip())
+                    if val > 0: up += val
+                except: pass
+            if "downlink" in line and "value" in line:
+                try:
+                    val = int(line.split(":")[-1].strip())
+                    if val > 0: down += val
+                except: pass
+        if up > 0 or down > 0:
+            return {"up": up, "down": down}
         
         return {"up": 0, "down": 0}
     except:
