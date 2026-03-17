@@ -1,7 +1,7 @@
 # AutoVPN - 一键 VPS 代理配置脚本 (v1.18.0 - Smart Polling)
 # =================================================================
 
-VERSION="v1.20.4"
+VERSION="v1.20.5"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -731,61 +731,11 @@ setup_guardian_bot() {
 
 
 
-    if [[ "$mode" != "silent" ]]; then
-        # 已开启集群模式下的管理菜单
-        if [[ "$CLUSTER_MODE" == "on" ]]; then
-            echo -e "\n${CYAN}--- Guardian Cluster (已开启) ---${NC}"
-            echo -e "1. 刷新本地守护进程 (重启服务)"
-            echo -e "2. 检查并更新云端中继 (Cloudflare Worker)"
-            echo -e "3. 重新配置集群信息 (手动/自动)"
-            echo -e "0. 返回"
-            read -p "请选择: " cluster_mgr_choice
-            case $cluster_mgr_choice in
-                1) systemctl restart autovpn-guardian; log_info "守护进程已重启"; return ;;
-                2) deploy_cf_worker; return ;;
-                3) unset CLUSTER_MODE ;; # 进入下方的配置逻辑
-                *) return ;;
-            esac
-        fi
-
-        # 集群模式选择
-        # v1.18.37: 静默模式强制配置，不管 CLUSTER_MODE 状态
-        if [[ "$mode" == "silent" ]] || [[ -z "$CLUSTER_MODE" || "$CLUSTER_MODE" == "off" ]]; then
-            # [v1.18.0] 如果命令行已传入 URL 和 Token，直接开启
-            if [[ ! -z "$CF_WORKER_URL" && ! -z "$CLUSTER_TOKEN" ]]; then
-                CLUSTER_MODE="on"
-                save_env
-                log_info "✅ 已通过命令行参数成功加入集群。"
-            else
-                echo -e "\n${CYAN}--- Guardian Cluster 集群配置 ---${NC}"
-                echo -e "1. 独立运行 (单机 Telegram 控制)"
-                echo -e "2. 使用 Cloudflare Worker (全自动一键部署)"
-                echo -e "3. 使用 Cloudflare Worker (手动填入已有信息)"
-                read -p "请选择模式 [1/2/3, 默认 1]: " cluster_choice
-                case $cluster_choice in
-                    2)
-                        deploy_cf_worker || { echo "切换到手动模式..."; read -p "请输入 Cloudflare Worker URL: " CF_WORKER_URL; read -p "请输入集群通讯 Token: " CLUSTER_TOKEN; CLUSTER_MODE="on"; }
-                        ;;
-                    3)
-                        CLUSTER_MODE="on"
-                        read -p "请输入 Cloudflare Worker URL: " CF_WORKER_URL
-                        read -p "请输入集群通讯 Token: " CLUSTER_TOKEN
-                        save_env
-                        ;;
-                    *)
-                        CLUSTER_MODE="off"
-                        save_env
-                        ;;
-                esac
-            fi
-        fi
-    fi
-
-    # 创建驱动脚本 (v1.18.0 - Stateless Security)
+    # [v1.20.4] 始终更新 guardian.py 代码（不受集群菜单 return 影响）
     cat > /usr/local/etc/autovpn/guardian.py <<'EOF'
 import requests, time, subprocess, os, json, statistics, sys, socket
 
-VERSION = "1.20.4"
+VERSION = "1.20.5"
 ENV_PATH = "/usr/local/etc/autovpn/.env"
 
 # [v1.18.46] 优先从 .env 读取 NODE_ID（配对模式），否则使用 hostname
@@ -954,6 +904,37 @@ def main():
 if __name__ == "__main__": main()
 EOF
     chmod +x /usr/local/etc/autovpn/guardian.py
+    log_info "✅ guardian.py 已更新 (v$(grep 'VERSION = ' /usr/local/etc/autovpn/guardian.py | head -1 | cut -d'"' -f2))"
+
+    # [v1.20.4] 集群配置（仅首次或未配置时交互，已配置时跳过）
+    if [[ "$mode" != "silent" && ( -z "$CLUSTER_MODE" || "$CLUSTER_MODE" == "off" ) ]]; then
+        if [[ ! -z "$CF_WORKER_URL" && ! -z "$CLUSTER_TOKEN" ]]; then
+            CLUSTER_MODE="on"
+            save_env
+            log_info "✅ 已通过命令行参数成功加入集群。"
+        else
+            echo -e "\n${CYAN}--- Guardian Cluster 集群配置 ---${NC}"
+            echo -e "1. 独立运行 (单机 Telegram 控制)"
+            echo -e "2. 使用 Cloudflare Worker (全自动一键部署)"
+            echo -e "3. 使用 Cloudflare Worker (手动填入已有信息)"
+            read -p "请选择模式 [1/2/3, 默认 1]: " cluster_choice
+            case $cluster_choice in
+                2)
+                    deploy_cf_worker || { echo "切换到手动模式..."; read -p "请输入 Cloudflare Worker URL: " CF_WORKER_URL; read -p "请输入集群通讯 Token: " CLUSTER_TOKEN; CLUSTER_MODE="on"; }
+                    ;;
+                3)
+                    CLUSTER_MODE="on"
+                    read -p "请输入 Cloudflare Worker URL: " CF_WORKER_URL
+                    read -p "请输入集群通讯 Token: " CLUSTER_TOKEN
+                    save_env
+                    ;;
+                *)
+                    CLUSTER_MODE="off"
+                    save_env
+                    ;;
+            esac
+        fi
+    fi
 
     # 创建 Systemd Service
     cat > /etc/systemd/system/autovpn-guardian.service <<EOF
