@@ -30,6 +30,22 @@ bash install.sh --mode ws --domain example.com --cf-token TOKEN --email you@exam
     --nezha-server nezha.example.com:8008 --nezha-secret SECRET
 ```
 
+## 一键恢复（推荐）
+
+在本地电脑保存一条命令，新开 VPS 或需要重装时，一行搞定：
+
+```bash
+ssh root@你的IP "bash <(curl -sL https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh) --mode ws --domain 你的域名 --cf-token 你的TOKEN --email 你的邮箱"
+```
+
+Reality 备用：
+
+```bash
+ssh root@你的IP "bash <(curl -sL https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh) --mode reality"
+```
+
+敏感信息只存在你自己电脑上，VPS 上不留痕迹。跑完等输出 VLESS 链接，导入客户端即可。
+
 ## 两种模式对比
 
 | | WS + TLS + CDN | Reality |
