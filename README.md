@@ -1,6 +1,6 @@
 # AutoVPN
 
-一键部署 VLESS + WS + TLS + WARP 代理，集成 [哪吒监控](https://github.com/nezhahq/nezha) Agent 自动安装。
+一键部署 VLESS 代理，支持两种模式，集成 [哪吒监控](https://github.com/nezhahq/nezha) Agent。
 
 ## 快速安装
 
@@ -8,43 +8,53 @@
 curl -sL https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh | bash
 ```
 
-或下载后执行：
+运行后选择模式：
+1. **WS + TLS + CDN** — 需要域名 + Cloudflare Token，走 CDN 抗封锁
+2. **Reality** — 免域名，直连，抗检测
 
+## 静默安装
+
+WS 模式：
 ```bash
-wget -N https://raw.githubusercontent.com/ecolid/autovpn/main/install.sh && chmod +x install.sh && ./install.sh
+bash install.sh --mode ws --domain example.com --cf-token TOKEN --email you@example.com
 ```
 
-## 静默安装（无交互）
-
+Reality 模式：
 ```bash
-bash install.sh --domain example.com --cf-token YOUR_TOKEN --email you@example.com --uuid YOUR_UUID
+bash install.sh --mode reality
 ```
 
 带哪吒监控：
-
 ```bash
-bash install.sh --domain example.com --cf-token YOUR_TOKEN --email you@example.com \
-    --nezha-server nezha.example.com:8008 --nezha-secret YOUR_SECRET
+bash install.sh --mode ws --domain example.com --cf-token TOKEN --email you@example.com \
+    --nezha-server nezha.example.com:8008 --nezha-secret SECRET
 ```
 
-## 功能
+## 两种模式对比
 
-- **VLESS + WS + TLS** — 通过 Cloudflare CDN 转发，抗封锁
-- **Cloudflare WARP** — 出口 IP 伪装，解锁地区限制
-- **自动 DNS** — 自动创建/更新 Cloudflare DNS 记录并开启 CDN
-- **自动 SSL** — 通过 acme.sh + DNS 验证自动申请证书
-- **哪吒监控** — 可选安装 Agent，接入哪吒面板统一监控
+| | WS + TLS + CDN | Reality |
+|---|---|---|
+| 域名 | 需要 | 不需要 |
+| CF Token | 需要 | 不需要 |
+| 抗封锁 | CDN 中转，IP 不暴露 | 伪装 TLS 握手 |
+| 速度 | 取决于 CDN | 直连，更快 |
+| 适用场景 | 重度封锁环境 | 日常使用，CF 故障备用 |
 
-## 部署参数
+## 参数
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `--domain` | 域名 | 交互输入 |
-| `--cf-token` | Cloudflare API Token | 交互输入 |
-| `--email` | 邮箱（SSL 证书） | 交互输入 |
+| `--mode` | `ws` 或 `reality` | 交互选择 |
+| `--domain` | 域名 (WS 模式) | 交互输入 |
+| `--cf-token` | CF API Token (WS 模式) | 交互输入 |
+| `--email` | 邮箱 (WS 模式) | 交互输入 |
 | `--uuid` | VLESS UUID | 自动生成 |
-| `--ws-path` | WebSocket 路径 | `/lovelinux` |
-| `--port` | Xray 监听端口 | `8443` |
+| `--ws-path` | WS 路径 | `/lovelinux` |
+| `--port` | Xray 端口 | WS: `8443` / Reality: `443` |
+| `--fake-domain` | Reality 伪装域名 | `www.cloudflare.com` |
+| `--private-key` | Reality 私钥 | 自动生成 |
+| `--public-key` | Reality 公钥 | 自动生成 |
+| `--short-id` | Reality Short ID | 自动生成 |
 | `--nezha-server` | 哪吒面板地址 | 可选 |
 | `--nezha-secret` | 哪吒 Agent Secret | 可选 |
 
